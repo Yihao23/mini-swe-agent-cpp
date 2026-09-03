@@ -1,0 +1,817 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body>
+<title>Agent 骨架图纸</title>
+
+<style>
+  :root {
+    --ground: #E5E9ED;
+    --paper: #F0F3F6;
+    --ink: #16283A;
+    --ink-soft: #4C5F72;
+    --ink-faint: #7C8B99;
+    --rule: rgba(22, 40, 58, .18);
+    --rule-strong: rgba(22, 40, 58, .40);
+    --fill: rgba(22, 40, 58, .045);
+    --accent: #0A6A88;
+    --accent-fill: rgba(10, 106, 136, .10);
+    --hazard: #A33420;
+    --hazard-fill: rgba(163, 52, 32, .08);
+    --grid: rgba(22, 40, 58, .055);
+
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "DejaVu Sans Mono",
+            "Liberation Mono", Menlo, Consolas, monospace;
+    --sans: "Helvetica Neue", Helvetica, Arial, "Noto Sans CJK SC",
+            "Source Han Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --serif: Charter, "Bitstream Charter", Georgia, "Noto Serif CJK SC",
+             "Source Han Serif SC", "Songti SC", serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0D1F31;
+      --paper: #14293D;
+      --ink: #DBE5EC;
+      --ink-soft: #9AAEBD;
+      --ink-faint: #6D8395;
+      --rule: rgba(219, 229, 236, .20);
+      --rule-strong: rgba(219, 229, 236, .44);
+      --fill: rgba(219, 229, 236, .05);
+      --accent: #6BC7E4;
+      --accent-fill: rgba(107, 199, 228, .13);
+      --hazard: #EE8E74;
+      --hazard-fill: rgba(238, 142, 116, .11);
+      --grid: rgba(219, 229, 236, .05);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #0D1F31;
+    --paper: #14293D;
+    --ink: #DBE5EC;
+    --ink-soft: #9AAEBD;
+    --ink-faint: #6D8395;
+    --rule: rgba(219, 229, 236, .20);
+    --rule-strong: rgba(219, 229, 236, .44);
+    --fill: rgba(219, 229, 236, .05);
+    --accent: #6BC7E4;
+    --accent-fill: rgba(107, 199, 228, .13);
+    --hazard: #EE8E74;
+    --hazard-fill: rgba(238, 142, 116, .11);
+    --grid: rgba(219, 229, 236, .05);
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--ground);
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 28px 28px, 28px 28px;
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .sheet {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 0 24px 96px;
+    display: flex;
+    flex-direction: column;
+    gap: 44px;
+  }
+
+  /* ---- title block ---------------------------------------------------- */
+  .titleblock {
+    margin-top: 56px;
+    border: 1px solid var(--rule-strong);
+    background: var(--paper);
+    display: grid;
+    grid-template-columns: 1fr auto;
+  }
+  .titleblock > div { padding: 22px 24px; }
+  .titleblock > div + div {
+    border-left: 1px solid var(--rule);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 6px;
+    min-width: 168px;
+  }
+  h1 {
+    font-family: var(--mono);
+    font-size: clamp(24px, 4.4vw, 38px);
+    font-weight: 600;
+    letter-spacing: -.01em;
+    line-height: 1.15;
+    text-wrap: balance;
+    margin: 0 0 10px;
+  }
+  .lede { margin: 0; max-width: 56ch; color: var(--ink-soft); }
+  .lede code { font-size: .88em; }
+
+  .meta-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 14px;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+  }
+  .meta-row span:first-child { color: var(--ink-faint); }
+  .meta-row span:last-child { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+  /* ---- plates --------------------------------------------------------- */
+  figure.plate {
+    margin: 0;
+    border: 1px solid var(--rule-strong);
+    background: var(--paper);
+    display: flex;
+    flex-direction: column;
+  }
+  .plate-head {
+    padding: 16px 24px 14px;
+    border-bottom: 1px solid var(--rule);
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  .plate-no {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .12em;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    padding: 2px 7px;
+    flex: none;
+  }
+  .plate-head h2 {
+    font-family: var(--sans);
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: .01em;
+    margin: 0;
+  }
+  .plate-head .claim {
+    font-family: var(--serif);
+    font-size: 14px;
+    color: var(--ink-soft);
+    margin: 0;
+    flex-basis: 100%;
+  }
+  .canvas { padding: 22px 24px; overflow-x: auto; }
+  .canvas svg { display: block; width: 100%; min-width: 620px; height: auto; }
+  figcaption {
+    padding: 0 24px 22px;
+    font-size: 14.5px;
+    color: var(--ink-soft);
+    max-width: 74ch;
+  }
+  figcaption strong { color: var(--ink); font-weight: 600; }
+  figcaption code, .lede code, .note code {
+    font-family: var(--mono);
+    font-size: .85em;
+    background: var(--fill);
+    padding: 1px 4px;
+  }
+  figcaption .hz { color: var(--hazard); }
+
+  /* ---- svg primitives ------------------------------------------------- */
+  .box { fill: var(--fill); stroke: var(--rule-strong); stroke-width: 1; }
+  .box-key { fill: var(--accent-fill); stroke: var(--accent); stroke-width: 1.4; }
+  .box-plain { fill: none; stroke: var(--rule-strong); stroke-width: 1; }
+  .edge { stroke: var(--ink); stroke-width: 1.3; fill: none; }
+  .edge-key { stroke: var(--accent); stroke-width: 1.7; fill: none; }
+  .edge-dash { stroke: var(--ink-faint); stroke-width: 1.2; fill: none; stroke-dasharray: 5 4; }
+  .edge-hz { stroke: var(--hazard); stroke-width: 1.2; fill: none; stroke-dasharray: 4 3; }
+  .hair { stroke: var(--rule); stroke-width: 1; fill: none; }
+
+  text { font-family: var(--sans); fill: var(--ink); }
+  .t-name { font-family: var(--mono); font-size: 13px; font-weight: 600; }
+  .t-name-s { font-family: var(--mono); font-size: 11.5px; font-weight: 600; }
+  .t-cn { font-size: 12.5px; }
+  .t-sub { font-size: 11px; fill: var(--ink-soft); }
+  .t-edge { font-size: 11px; fill: var(--ink-soft); }
+  .t-edge-key { font-size: 11px; fill: var(--accent); font-weight: 600; }
+  .t-hz { font-size: 11px; fill: var(--hazard); }
+  .t-layer {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em;
+    fill: var(--ink-faint);
+  }
+  .t-tag {
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: .06em;
+    fill: var(--accent);
+  }
+  .t-num {
+    font-family: var(--mono); font-size: 11px; fill: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
+  }
+  .ah-ink { fill: var(--ink); }
+  .ah-key { fill: var(--accent); }
+  .ah-soft { fill: var(--ink-faint); }
+  .ah-hz { fill: var(--hazard); }
+
+  svg.defs-only { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+  /* ---- notes ---------------------------------------------------------- */
+  .note {
+    border: 1px solid var(--rule-strong);
+    border-left: 3px solid var(--hazard);
+    background: var(--paper);
+    padding: 18px 24px;
+  }
+  .note h3 {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--hazard);
+    margin: 0 0 10px;
+  }
+  .note ul { margin: 0; padding-left: 1.1em; display: flex; flex-direction: column; gap: 7px; }
+  .note li { font-size: 14.5px; }
+
+  footer {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .06em;
+    color: var(--ink-faint);
+    border-top: 1px solid var(--rule);
+    padding-top: 16px;
+  }
+
+  @media (max-width: 640px) {
+    .titleblock { grid-template-columns: 1fr; }
+    .titleblock > div + div { border-left: none; border-top: 1px solid var(--rule); }
+    .canvas { padding: 18px 14px; }
+    .plate-head, figcaption { padding-left: 16px; padding-right: 16px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<svg class="defs-only" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <polygon class="ah-ink" points="0,1 10,5 0,9" />
+    </marker>
+    <marker id="ar-key" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <polygon class="ah-key" points="0,1 10,5 0,9" />
+    </marker>
+    <marker id="ar-soft" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <polygon class="ah-soft" points="0,1 10,5 0,9" />
+    </marker>
+    <marker id="ar-hz" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <polygon class="ah-hz" points="0,1 10,5 0,9" />
+    </marker>
+  </defs>
+</svg>
+
+<div class="sheet">
+
+  <header class="titleblock">
+    <div>
+      <h1>Agent 骨架图纸</h1>
+      <p class="lede">
+        <code>mini-swe-agent-cpp</code> 的五张结构图。第 2 张是心脏，其余四张分别画出
+        它周围的四件事：谁依赖谁、权限在哪里拦、上下文预算怎么花、以及
+        C++ 特有的所有权与构造顺序。
+      </p>
+    </div>
+    <div>
+      <div class="meta-row"><span>语言</span><span>C++23</span></div>
+      <div class="meta-row"><span>模块</span><span>21</span></div>
+      <div class="meta-row"><span>阶段</span><span>S0 – S7</span></div>
+      <div class="meta-row"><span>图幅</span><span>5</span></div>
+    </div>
+  </header>
+
+  <!-- ================================================================= -->
+  <figure class="plate">
+    <div class="plate-head">
+      <span class="plate-no">图 1</span>
+      <h2>分层与依赖方向</h2>
+      <p class="claim">依赖只向下。<code>Agent</code> 只认识三个协作者，其余全是被它们借用的能力。</p>
+    </div>
+    <div class="canvas">
+      <svg viewBox="0 0 900 470" role="img"
+           aria-label="六层结构图：界面层、装配层、核心循环、三个协作者、能力层、契约层，依赖方向自上而下。">
+
+        <!-- dependency rail -->
+        <line class="edge-key" x1="22" y1="24" x2="22" y2="420" marker-end="url(#ar-key)" />
+        <text class="t-edge-key" x="26" y="18">依赖方向</text>
+
+        <!-- L1 interface -->
+        <text class="t-layer" x="94" y="48" text-anchor="end">界面层</text>
+        <rect class="box" x="106" y="16" width="250" height="56" />
+        <text class="t-name" x="120" y="40">Cli</text>
+        <text class="t-sub" x="120" y="57">渲染事件 · REPL · 斜杠命令</text>
+        <text class="t-tag" x="344" y="32" text-anchor="end">S7</text>
+        <text class="t-sub" x="376" y="48">换成 Web 前端只需换掉这一个文件</text>
+
+        <!-- L2 assembly -->
+        <text class="t-layer" x="94" y="120" text-anchor="end">装配层</text>
+        <rect class="box" x="106" y="88" width="784" height="56" />
+        <text class="t-name" x="120" y="112">App</text>
+        <text class="t-sub" x="120" y="129">拥有下面全部对象 · pimpl · 不可拷贝不可移动</text>
+        <text class="t-tag" x="878" y="104" text-anchor="end">S7</text>
+
+        <!-- L3 core -->
+        <text class="t-layer" x="94" y="192" text-anchor="end">核心</text>
+        <rect class="box-key" x="106" y="160" width="250" height="56" />
+        <text class="t-name" x="120" y="184">Agent::run</text>
+        <text class="t-sub" x="120" y="201">十行的主循环 — 见图 2</text>
+        <text class="t-tag" x="344" y="176" text-anchor="end">S1</text>
+
+        <!-- L4 collaborators -->
+        <text class="t-layer" x="94" y="264" text-anchor="end">协作者</text>
+        <rect class="box" x="106" y="232" width="250" height="56" />
+        <text class="t-name" x="120" y="256">LlmClient</text>
+        <text class="t-sub" x="120" y="273">虚接口 · 真的 + FakeLlm</text>
+        <text class="t-tag" x="344" y="248" text-anchor="end">S1</text>
+
+        <rect class="box" x="372" y="232" width="250" height="56" />
+        <text class="t-name" x="386" y="256">Executor · ToolRegistry</text>
+        <text class="t-sub" x="386" y="273">授权 · 并发 · 超时 · 截断</text>
+        <text class="t-tag" x="610" y="248" text-anchor="end">S2</text>
+
+        <rect class="box" x="638" y="232" width="252" height="56" />
+        <text class="t-name" x="652" y="256">Session</text>
+        <text class="t-sub" x="652" y="273">历史 · 落盘 · 压缩</text>
+        <text class="t-tag" x="878" y="248" text-anchor="end">S1·S4</text>
+
+        <!-- L5 capabilities -->
+        <text class="t-layer" x="94" y="336" text-anchor="end">能力层</text>
+        <rect class="box" x="106" y="304" width="105" height="56" />
+        <text class="t-name-s" x="116" y="329">Sandbox</text>
+        <text class="t-tag" x="201" y="352" text-anchor="end">S3</text>
+
+        <rect class="box" x="219" y="304" width="105" height="56" />
+        <text class="t-name-s" x="229" y="329">Memory</text>
+        <text class="t-tag" x="314" y="352" text-anchor="end">S5</text>
+
+        <rect class="box" x="332" y="304" width="105" height="56" />
+        <text class="t-name-s" x="342" y="329">Skills</text>
+        <text class="t-tag" x="427" y="352" text-anchor="end">S5</text>
+
+        <rect class="box" x="445" y="304" width="105" height="56" />
+        <text class="t-name-s" x="455" y="329">Background</text>
+        <text class="t-tag" x="540" y="352" text-anchor="end">S6</text>
+
+        <rect class="box" x="558" y="304" width="105" height="56" />
+        <text class="t-name-s" x="568" y="329">Scheduler</text>
+        <text class="t-tag" x="653" y="352" text-anchor="end">S6</text>
+
+        <rect class="box" x="671" y="304" width="105" height="56" />
+        <text class="t-name-s" x="681" y="329">Subagent</text>
+        <text class="t-tag" x="766" y="352" text-anchor="end">S6</text>
+
+        <rect class="box" x="784" y="304" width="106" height="56" />
+        <text class="t-name-s" x="794" y="329">McpClient</text>
+        <text class="t-tag" x="880" y="352" text-anchor="end">S7</text>
+
+        <!-- L6 contracts -->
+        <text class="t-layer" x="94" y="408" text-anchor="end">契约层</text>
+        <rect class="box-plain" x="106" y="376" width="150" height="56" />
+        <text class="t-name-s" x="116" y="401">Config</text>
+        <text class="t-tag" x="246" y="424" text-anchor="end">S0</text>
+
+        <rect class="box-plain" x="264" y="376" width="150" height="56" />
+        <text class="t-name-s" x="274" y="401">Message</text>
+        <text class="t-tag" x="404" y="424" text-anchor="end">S0</text>
+
+        <rect class="box-plain" x="422" y="376" width="150" height="56" />
+        <text class="t-name-s" x="432" y="401">Parser</text>
+        <text class="t-tag" x="562" y="424" text-anchor="end">S1</text>
+
+        <rect class="box-plain" x="580" y="376" width="150" height="56" />
+        <text class="t-name-s" x="590" y="401">Prompt</text>
+        <text class="t-tag" x="720" y="424" text-anchor="end">S4</text>
+
+        <rect class="box-plain" x="738" y="376" width="152" height="56" />
+        <text class="t-name-s" x="748" y="401">Json</text>
+        <text class="t-tag" x="880" y="424" text-anchor="end">边界</text>
+
+        <!-- tool interface note -->
+        <line class="edge-dash" x1="497" y1="288" x2="497" y2="304" marker-end="url(#ar-soft)" />
+        <line class="edge-dash" x1="723" y1="288" x2="723" y2="304" marker-end="url(#ar-soft)" />
+        <line class="edge-dash" x1="836" y1="288" x2="836" y2="304" marker-end="url(#ar-soft)" />
+        <text class="t-edge" x="640" y="299">后台任务 / 子 agent / MCP 远程工具都包成普通 Tool</text>
+      </svg>
+    </div>
+    <figcaption>
+      方框右上角的 <code>S0</code>–<code>S7</code> 是实现阶段。<strong>能力层的三个模块通向
+      <code>Executor</code> 的虚线</strong>说明了 <code>Tool</code> 抽象的回报：后台任务、子 agent、
+      MCP 远程工具最终都是同一个形状，<code>Executor</code> 和 <code>Sandbox</code> 分不出哪个是远程的。
+    </figcaption>
+  </figure>
+
+  <!-- ================================================================= -->
+  <figure class="plate">
+    <div class="plate-head">
+      <span class="plate-no">图 2</span>
+      <h2>一轮循环的数据流</h2>
+      <p class="claim">整个项目的心脏。两条回边把它变成循环 —— 一条写回 assistant 轮，一条写回工具结果。</p>
+    </div>
+    <div class="canvas">
+      <svg viewBox="0 0 840 770" role="img"
+           aria-label="Agent 主循环的数据流：用户输入进入 Session，Prompt 组装请求，LlmClient 返回响应，parse 归一化，若要工具则经 Executor 与 Sandbox 执行后写回历史再循环，否则返回最终文本。">
+
+        <!-- nodes -->
+        <rect class="box-plain" x="90" y="20" width="210" height="40" />
+        <text class="t-cn" x="104" y="45">用户输入</text>
+
+        <rect class="box" x="90" y="94" width="340" height="58" />
+        <text class="t-name" x="104" y="118">Session</text>
+        <text class="t-sub" x="104" y="136">vector&lt;Message&gt; · 唯一的历史真相</text>
+        <text class="t-tag" x="418" y="110" text-anchor="end">S1</text>
+
+        <rect class="box" x="90" y="186" width="400" height="58" />
+        <text class="t-name" x="104" y="210">build_system + turn_context</text>
+        <text class="t-sub" x="104" y="228">静态段进 system，动态段进 &lt;system-reminder&gt;</text>
+        <text class="t-tag" x="478" y="202" text-anchor="end">S4</text>
+
+        <rect class="box-key" x="90" y="278" width="340" height="58" />
+        <text class="t-name" x="104" y="302">LlmClient::complete</text>
+        <text class="t-sub" x="104" y="320">expected&lt;LlmResponse, LlmError&gt;</text>
+        <text class="t-tag" x="418" y="294" text-anchor="end">S1</text>
+
+        <rect class="box" x="90" y="370" width="340" height="58" />
+        <text class="t-name" x="104" y="394">parser::parse</text>
+        <text class="t-sub" x="104" y="412">一趟产出：文本 · 思考 · 工具调用 · 历史消息</text>
+        <text class="t-tag" x="418" y="386" text-anchor="end">S1</text>
+
+        <!-- decision diamond -->
+        <polygon class="box" points="260,462 410,506 260,550 110,506" />
+        <text class="t-name-s" x="260" y="503" text-anchor="middle">parsed.wants_tools()</text>
+        <text class="t-sub" x="260" y="520" text-anchor="middle">只看 stop_reason 够吗？</text>
+
+        <rect class="box" x="90" y="584" width="340" height="58" />
+        <text class="t-name" x="104" y="608">Executor::run_batch</text>
+        <text class="t-sub" x="104" y="626">全只读才并发 · 有副作用一律串行</text>
+        <text class="t-tag" x="418" y="600" text-anchor="end">S2</text>
+
+        <rect class="box" x="90" y="676" width="400" height="58" />
+        <text class="t-name" x="104" y="700">Sandbox::check → Tool::run</text>
+        <text class="t-sub" x="104" y="718">见图 3 · 结果是值不是异常</text>
+        <text class="t-tag" x="478" y="692" text-anchor="end">S2·S3</text>
+
+        <!-- exit -->
+        <rect class="box-plain" x="500" y="478" width="210" height="56" />
+        <text class="t-cn" x="514" y="502">返回最终文本</text>
+        <text class="t-sub" x="514" y="520">StopEvent · end_turn</text>
+
+        <!-- forward edges -->
+        <line class="edge" x1="190" y1="60" x2="190" y2="92" marker-end="url(#ar)" />
+        <line class="edge" x1="190" y1="152" x2="190" y2="184" marker-end="url(#ar)" />
+        <text class="t-edge" x="202" y="172">messages</text>
+        <line class="edge" x1="190" y1="244" x2="190" y2="276" marker-end="url(#ar)" />
+        <text class="t-edge" x="202" y="264">LlmRequest：system + tools + messages</text>
+        <line class="edge" x1="190" y1="336" x2="190" y2="368" marker-end="url(#ar)" />
+        <text class="t-edge" x="202" y="356">LlmResponse</text>
+        <line class="edge" x1="190" y1="428" x2="190" y2="460" marker-end="url(#ar)" />
+        <text class="t-edge" x="202" y="448">ParsedResponse</text>
+        <line class="edge" x1="190" y1="550" x2="190" y2="582" marker-end="url(#ar)" />
+        <text class="t-edge" x="202" y="570">要工具 → ToolCallEvent[]</text>
+        <line class="edge" x1="190" y1="642" x2="190" y2="674" marker-end="url(#ar)" />
+
+        <!-- exit edge -->
+        <line class="edge" x1="410" y1="506" x2="498" y2="506" marker-end="url(#ar)" />
+        <text class="t-edge" x="454" y="498" text-anchor="middle">不要</text>
+
+        <!-- return edge A: tool results -> session -->
+        <polyline class="edge-key" points="490,705 770,705 770,123 432,123" marker-end="url(#ar-key)" />
+        <text class="t-edge-key" x="600" y="113" text-anchor="middle">tool_result 全部打进同一条 user 消息 → append</text>
+
+        <!-- return edge B: assistant turn -> session -->
+        <polyline class="edge-dash" points="90,399 34,399 34,137 88,137" marker-end="url(#ar-soft)" />
+        <text class="t-edge" x="24" y="290" text-anchor="middle"
+              transform="rotate(-90 24 290)">assistant 轮原样写回历史</text>
+      </svg>
+    </div>
+    <figcaption>
+      蓝色是循环闭合的那条边：<strong>一轮里所有 <code>tool_result</code> 必须打进同一条 user
+      消息</strong>，拆开会让模型逐渐学会不再并行调工具。虚线那条同样不能省 ——
+      assistant 轮要连 <code>thinking</code> 和 <code>signature</code> 一起原样回传，
+      <span class="hz">每个 <code>tool_use</code> 少一个配对的 <code>tool_result</code>，下一轮请求直接 400</span>。
+    </figcaption>
+  </figure>
+
+  <!-- ================================================================= -->
+  <figure class="plate">
+    <div class="plate-head">
+      <span class="plate-no">图 3</span>
+      <h2>权限闸门</h2>
+      <p class="claim">工具自己不做权限判断。<code>Executor</code> 在调用前统一问这一层，三态而非布尔。</p>
+    </div>
+    <div class="canvas">
+      <svg viewBox="0 0 880 420" role="img"
+           aria-label="权限判断流程：工具调用先拆分命令，再依次通过模式、规则、硬检查三道关卡，输出 Allow、Deny 或 Ask 三种结果，Ask 交给人决定拒绝、允许一次或本会话总是允许。">
+
+        <!-- hazard bracket over the gates -->
+        <polyline class="edge-hz" points="390,74 390,64 840,64 840,74" />
+        <text class="t-hz" x="615" y="54" text-anchor="middle">三道关卡串联：任一拒绝即拒绝</text>
+
+        <!-- chain -->
+        <rect class="box-plain" x="20" y="80" width="140" height="60" />
+        <text class="t-name-s" x="32" y="106">tool_use</text>
+        <text class="t-sub" x="32" y="123">name + args</text>
+
+        <rect class="box" x="200" y="80" width="150" height="60" />
+        <text class="t-name-s" x="212" y="106">split_command</text>
+        <text class="t-sub" x="212" y="123">按 &amp;&amp; || ; | 拆段</text>
+
+        <rect class="box" x="390" y="80" width="110" height="60" />
+        <text class="t-num" x="402" y="103">①</text>
+        <text class="t-cn" x="420" y="104">模式</text>
+        <text class="t-sub" x="402" y="123">readonly…yolo</text>
+
+        <rect class="box" x="540" y="80" width="120" height="60" />
+        <text class="t-num" x="552" y="103">②</text>
+        <text class="t-cn" x="570" y="104">规则</text>
+        <text class="t-sub" x="552" y="123">Write(src/**)</text>
+
+        <rect class="box" x="700" y="80" width="140" height="60" />
+        <text class="t-num" x="712" y="103">③</text>
+        <text class="t-cn" x="730" y="104">硬检查</text>
+        <text class="t-sub" x="712" y="123">路径逃逸 · 危险命令</text>
+
+        <line class="edge" x1="160" y1="110" x2="198" y2="110" marker-end="url(#ar)" />
+        <line class="edge" x1="350" y1="110" x2="388" y2="110" marker-end="url(#ar)" />
+        <line class="edge" x1="500" y1="110" x2="538" y2="110" marker-end="url(#ar)" />
+        <line class="edge" x1="660" y1="110" x2="698" y2="110" marker-end="url(#ar)" />
+
+        <!-- decision bus -->
+        <line class="edge" x1="770" y1="140" x2="770" y2="196" />
+        <line class="edge" x1="140" y1="200" x2="770" y2="200" />
+        <circle class="ah-ink" cx="770" cy="200" r="3.2" />
+        <text class="t-edge" x="430" y="192" text-anchor="middle">Decision — 三态，不是布尔</text>
+
+        <line class="edge-key" x1="140" y1="200" x2="140" y2="246" marker-end="url(#ar-key)" />
+        <line class="edge" x1="430" y1="200" x2="430" y2="246" marker-end="url(#ar)" />
+        <line class="edge" x1="720" y1="200" x2="720" y2="246" marker-end="url(#ar)" />
+
+        <!-- outcomes -->
+        <rect class="box-key" x="20" y="248" width="240" height="56" />
+        <text class="t-name-s" x="32" y="272">Allow</text>
+        <text class="t-sub" x="32" y="290">→ Tool::run(args, ctx)</text>
+
+        <rect class="box" x="300" y="248" width="260" height="56" />
+        <text class="t-name-s" x="312" y="272">Deny</text>
+        <text class="t-sub" x="312" y="290">→ ToolResult::error 回传模型自纠</text>
+
+        <rect class="box" x="600" y="248" width="240" height="56" />
+        <text class="t-name-s" x="612" y="272">Ask</text>
+        <text class="t-sub" x="612" y="290">→ AskFn 把决定权交还给人</text>
+
+        <!-- ask sub-bus -->
+        <line class="edge" x1="720" y1="304" x2="720" y2="322" />
+        <line class="edge" x1="636" y1="326" x2="804" y2="326" />
+        <line class="edge" x1="636" y1="326" x2="636" y2="342" marker-end="url(#ar)" />
+        <line class="edge" x1="720" y1="326" x2="720" y2="342" marker-end="url(#ar)" />
+        <line class="edge" x1="804" y1="326" x2="804" y2="342" marker-end="url(#ar)" />
+
+        <rect class="box-plain" x="600" y="344" width="72" height="34" />
+        <text class="t-name-s" x="636" y="366" text-anchor="middle">Deny</text>
+        <rect class="box-plain" x="684" y="344" width="72" height="34" />
+        <text class="t-name-s" x="720" y="366" text-anchor="middle">Once</text>
+        <rect class="box-plain" x="768" y="344" width="72" height="34" />
+        <text class="t-name-s" x="804" y="366" text-anchor="middle">Always</text>
+
+        <text class="t-hz" x="600" y="400">asker 为空（CI、子 agent）时 Ask 该退化成什么？—— 这条得你自己定</text>
+      </svg>
+    </div>
+    <figcaption>
+      <strong><code>split_command</code> 在三道关卡之前</strong>，因为
+      <code>git status &amp;&amp; rm -rf /</code> 整条看是安全的、拆开才不是 —— 这一步不做，后面全白搭。
+      <code>Ask</code> 是三态里最重要的那个：设计成 <code>bool</code>，后面加交互确认要整层重写。
+    </figcaption>
+  </figure>
+
+  <!-- ================================================================= -->
+  <figure class="plate">
+    <div class="plate-head">
+      <span class="plate-no">图 4</span>
+      <h2>上下文预算</h2>
+      <p class="claim">缓存断点把请求切成两半：前半必须逐字节稳定，后半允许每轮变化。</p>
+    </div>
+    <div class="canvas">
+      <svg viewBox="0 0 880 400" role="img"
+           aria-label="请求的字节布局：工具表、身份、工具指南、技能索引、记忆索引构成静态前缀，缓存断点之后是对话消息与 system-reminder 动态块；下方是渐进式披露的四步加载链。">
+
+        <!-- brackets -->
+        <polyline class="edge-key" points="20,52 20,42 566,42 566,52" />
+        <text class="t-edge-key" x="293" y="32" text-anchor="middle">逐字节稳定 → 每轮命中缓存</text>
+        <polyline class="edge" points="578,52 578,42 860,42 860,52" />
+        <text class="t-edge" x="719" y="32" text-anchor="middle">每轮都变 → 只有这段重新计费</text>
+
+        <!-- byte stream -->
+        <rect class="box" x="20" y="60" width="110" height="64" />
+        <text class="t-name-s" x="75" y="88" text-anchor="middle">tools</text>
+        <text class="t-sub" x="75" y="105" text-anchor="middle">按名字排序</text>
+
+        <rect class="box" x="130" y="60" width="110" height="64" />
+        <text class="t-name-s" x="185" y="88" text-anchor="middle">identity</text>
+        <text class="t-sub" x="185" y="105" text-anchor="middle">身份段</text>
+
+        <rect class="box" x="240" y="60" width="110" height="64" />
+        <text class="t-name-s" x="295" y="88" text-anchor="middle">tool guide</text>
+        <text class="t-sub" x="295" y="105" text-anchor="middle">使用要点</text>
+
+        <rect class="box" x="350" y="60" width="110" height="64" />
+        <text class="t-name-s" x="405" y="88" text-anchor="middle">skill 索引</text>
+        <text class="t-sub" x="405" y="105" text-anchor="middle">一条一行</text>
+
+        <rect class="box" x="460" y="60" width="106" height="64" />
+        <text class="t-name-s" x="513" y="88" text-anchor="middle">memory 索引</text>
+        <text class="t-sub" x="513" y="105" text-anchor="middle">MEMORY.md</text>
+
+        <!-- cache breakpoint -->
+        <line class="edge-key" x1="569" y1="56" x2="569" y2="128" />
+        <line class="edge-key" x1="575" y1="56" x2="575" y2="128" />
+        <text class="t-edge-key" x="572" y="146" text-anchor="middle">cache_breakpoint</text>
+
+        <rect class="box" x="578" y="60" width="180" height="64" />
+        <text class="t-name-s" x="668" y="88" text-anchor="middle">messages</text>
+        <text class="t-sub" x="668" y="105" text-anchor="middle">整段对话历史</text>
+
+        <rect class="box" x="758" y="60" width="102" height="64" />
+        <text class="t-name-s" x="809" y="84" text-anchor="middle">reminder</text>
+        <text class="t-sub" x="809" y="99" text-anchor="middle">时间 · 后台</text>
+        <text class="t-sub" x="809" y="113" text-anchor="middle">通知 · todo</text>
+
+        <text class="t-hz" x="20" y="172">断点之前混进一个时间戳或 uuid → 它后面的一切（也就是整段对话）每轮全额重新计费</text>
+
+        <line class="hair" x1="20" y1="196" x2="860" y2="196" />
+        <text class="t-layer" x="20" y="222">渐进式披露 — MEMORY 与 SKILLS 共用的一招</text>
+
+        <!-- progressive disclosure chain -->
+        <rect class="box" x="20" y="240" width="190" height="60" />
+        <text class="t-cn" x="32" y="264">索引常驻</text>
+        <text class="t-sub" x="32" y="283">一百条也只占几百 token</text>
+
+        <rect class="box" x="236" y="240" width="150" height="60" />
+        <text class="t-cn" x="248" y="264">模型判断</text>
+        <text class="t-sub" x="248" y="283">这条相关吗</text>
+
+        <rect class="box" x="412" y="240" width="200" height="60" />
+        <text class="t-cn" x="424" y="264">加载正文</text>
+        <text class="t-sub" x="424" y="283">skill(name) / memory(name)</text>
+
+        <rect class="box" x="638" y="240" width="222" height="60" />
+        <text class="t-cn" x="650" y="264">附件按需</text>
+        <text class="t-sub" x="650" y="283">正文引用的第二层，模型自己去 read</text>
+
+        <line class="edge" x1="210" y1="270" x2="234" y2="270" marker-end="url(#ar)" />
+        <line class="edge" x1="386" y1="270" x2="410" y2="270" marker-end="url(#ar)" />
+        <line class="edge" x1="612" y1="270" x2="636" y2="270" marker-end="url(#ar)" />
+
+        <polyline class="edge-dash" points="115,240 115,214 405,214 405,124" marker-end="url(#ar-soft)" />
+        <text class="t-edge" x="205" y="208">索引就住在断点之前</text>
+
+        <text class="t-edge" x="20" y="336">超过 compact_at_tokens 时：在 user 边界切分，老历史换成纪要 —— 切在 tool_result 中间会留下没配对的 tool_use</text>
+        <text class="t-edge" x="20" y="358">子 agent 是另一条省法：它读两万行，主 agent 只收 300 字结论，主循环的断点前缀完全没动</text>
+      </svg>
+    </div>
+    <figcaption>
+      <strong>缓存是前缀逐字节匹配的</strong>，所以这张图其实是一条纪律而不是一个结构：
+      静态的（身份、工具用法、两个索引、工作区路径）进 <code>system</code>，
+      动态的（当前时间、后台任务通知、todo 变化）一律包进 user 轮的
+      <code>&lt;system-reminder&gt;</code>。工具表排在最前面，
+      <span class="hz">顺序一变整个缓存前缀就废了</span> —— 这就是
+      <code>tool_schemas_are_sorted</code> 那个测试存在的理由。
+    </figcaption>
+  </figure>
+
+  <!-- ================================================================= -->
+  <figure class="plate">
+    <div class="plate-head">
+      <span class="plate-no">图 5</span>
+      <h2>所有权与构造顺序</h2>
+      <p class="claim">成员按声明顺序构造、按逆序析构。被指向的必须在前面，<code>agent</code> 必须最后。</p>
+    </div>
+    <div class="canvas">
+      <svg viewBox="0 0 880 470" role="img"
+           aria-label="App::Impl 的十一个成员按声明顺序排列，第十个 ToolContext 用非拥有裸指针指回前面七个成员，第十一个 Agent 持有 ToolContext 的引用，因此必须最后声明。">
+
+        <line class="edge-key" x1="196" y1="34" x2="196" y2="410" marker-end="url(#ar-key)" />
+        <text class="t-edge-key" x="186" y="220" text-anchor="middle"
+              transform="rotate(-90 186 220)">声明顺序 = 构造顺序（析构逆序）</text>
+
+        <!-- 11 members -->
+        <rect class="box" x="250" y="40" width="280" height="28" />
+        <text class="t-num" x="234" y="59" text-anchor="end">1</text>
+        <text class="t-name-s" x="262" y="59">Config cfg</text>
+        <text class="t-sub" x="518" y="59" text-anchor="end">按值持有一份拷贝</text>
+
+        <rect class="box" x="250" y="74" width="280" height="28" />
+        <text class="t-num" x="234" y="93" text-anchor="end">2</text>
+        <text class="t-name-s" x="262" y="93">unique_ptr&lt;LlmClient&gt; llm</text>
+
+        <rect class="box" x="250" y="108" width="280" height="28" />
+        <text class="t-num" x="234" y="127" text-anchor="end">3</text>
+        <text class="t-name-s" x="262" y="127">Sandbox sandbox</text>
+
+        <rect class="box" x="250" y="142" width="280" height="28" />
+        <text class="t-num" x="234" y="161" text-anchor="end">4</text>
+        <text class="t-name-s" x="262" y="161">BackgroundManager background</text>
+
+        <rect class="box" x="250" y="176" width="280" height="28" />
+        <text class="t-num" x="234" y="195" text-anchor="end">5</text>
+        <text class="t-name-s" x="262" y="195">Memory memory</text>
+
+        <rect class="box" x="250" y="210" width="280" height="28" />
+        <text class="t-num" x="234" y="229" text-anchor="end">6</text>
+        <text class="t-name-s" x="262" y="229">SkillRegistry skills</text>
+
+        <rect class="box" x="250" y="244" width="280" height="28" />
+        <text class="t-num" x="234" y="263" text-anchor="end">7</text>
+        <text class="t-name-s" x="262" y="263">McpClient mcp</text>
+
+        <rect class="box" x="250" y="278" width="280" height="28" />
+        <text class="t-num" x="234" y="297" text-anchor="end">8</text>
+        <text class="t-name-s" x="262" y="297">ToolRegistry registry</text>
+        <text class="t-sub" x="518" y="297" text-anchor="end">shared_ptr&lt;Tool&gt;</text>
+
+        <rect class="box" x="250" y="312" width="280" height="28" />
+        <text class="t-num" x="234" y="331" text-anchor="end">9</text>
+        <text class="t-name-s" x="262" y="331">Session session</text>
+
+        <rect class="box-key" x="250" y="346" width="280" height="28" />
+        <text class="t-num" x="234" y="365" text-anchor="end">10</text>
+        <text class="t-name-s" x="262" y="365">ToolContext ctx</text>
+        <text class="t-sub" x="518" y="365" text-anchor="end">全是裸指针</text>
+
+        <rect class="box-key" x="250" y="380" width="280" height="28" />
+        <text class="t-num" x="234" y="399" text-anchor="end">11</text>
+        <text class="t-name-s" x="262" y="399">Agent agent</text>
+        <text class="t-sub" x="518" y="399" text-anchor="end">持有 ctx 的引用</text>
+
+        <!-- pointer bracket: ctx -> earlier members -->
+        <polyline class="edge-dash" points="530,360 566,360 566,54" />
+        <line class="edge-dash" x1="566" y1="54" x2="534" y2="54" marker-end="url(#ar-soft)" />
+        <line class="edge-dash" x1="566" y1="122" x2="534" y2="122" marker-end="url(#ar-soft)" />
+        <line class="edge-dash" x1="566" y1="156" x2="534" y2="156" marker-end="url(#ar-soft)" />
+        <line class="edge-dash" x1="566" y1="190" x2="534" y2="190" marker-end="url(#ar-soft)" />
+        <line class="edge-dash" x1="566" y1="224" x2="534" y2="224" marker-end="url(#ar-soft)" />
+        <line class="edge-dash" x1="566" y1="292" x2="534" y2="292" marker-end="url(#ar-soft)" />
+        <line class="edge-dash" x1="566" y1="326" x2="534" y2="326" marker-end="url(#ar-soft)" />
+
+        <text class="t-edge" x="586" y="186">ToolContext 是一个“借来的引用包”</text>
+        <text class="t-edge" x="586" y="204">—— 非拥有裸指针，指向上面这些成员</text>
+        <text class="t-edge" x="586" y="230">所以它们必须先构造完毕</text>
+
+        <!-- hazard leaders -->
+        <polyline class="edge-hz" points="530,394 600,394 640,412" />
+        <text class="t-hz" x="646" y="416">agent 写在别处 → 拿到还没初始化的对象</text>
+        <text class="t-hz" x="250" y="440">这类顺序 bug 只在 release 构建下偶尔炸。当前构建类型正是 RelWithDebInfo。</text>
+        <text class="t-hz" x="250" y="458">App 因此显式 delete 了拷贝与移动 —— 移动只会留下一个 impl_ 为空的壳。</text>
+      </svg>
+    </div>
+    <figcaption>
+      这十一个成员住在 <code>App::Impl</code> 里（<code>src/app.cpp</code>），不在头文件里。
+      <strong>pimpl 在这里换来两样东西</strong>：顺序声明和构造函数挨在同一个文件、
+      调整顺序不会引起全项目重编译。它顺带还让 <code>Impl</code> 待在堆上一动不动，
+      那些裸指针天然保持有效。
+    </figcaption>
+  </figure>
+
+  <!-- ================================================================= -->
+  <div class="note">
+    <h3>图纸看不出来的四条纪律</h3>
+    <ul>
+      <li><strong>封闭集合用 <code>variant</code>，开放集合用虚函数。</strong>
+        content block 和事件由 API 定死 → <code>variant</code>，加一种时所有
+        <code>std::visit</code> 都编译报错；<code>Tool</code> 和 <code>LlmClient</code>
+        用户随时会加 → 虚函数。</li>
+      <li><strong>失败是值，不是异常。</strong>
+        <code>expected&lt;LlmResponse, LlmError&gt;</code> 让 429 能重试，
+        <code>ToolResult::is_error</code> 让读不到一个文件不会崩掉整个任务。</li>
+      <li><strong>能切掉 LLM 依赖的层就切掉。</strong>
+        <code>Scheduler</code> 只认识 <code>runner(task, upstream)</code>，
+        测试塞一个 lambda 就能验证拓扑序和环检测，不烧一分钱。</li>
+      <li><strong>生命周期契约只能写在注释里。</strong>
+        <code>FakeLlm</code> 持有 <code>const Config&amp;</code>、<code>ToolContext</code>
+        全是裸指针 —— 「你必须活得比我久」这件事编译器无法表达，也无法检查。</li>
+    </ul>
+  </div>
+
+  <footer>mini-swe-agent-cpp · 21 个模块 · 2681 行 · 15 个冒烟测试即规格说明</footer>
+
+</div>
+</body>
+</html>
