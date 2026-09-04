@@ -51,6 +51,7 @@ mini-swe-agent-cpp/
 └── tests/
     ├── microtest.hpp       A 50-line test framework you can read in one sitting
     ├── test_smoke.cpp      15 cases that serve as the specification
+    ├── test_loop.cpp       Shape of a turn, wired up without App
     ├── test_config.cpp     Priority chain and the to_string round trip
     ├── test_tool.cpp       Tool registry and schema invariants
     ├── test_parser.cpp     Wire-format contracts on both ends of the loop
@@ -85,6 +86,7 @@ Stage 3+ ░░░░░░░░░░░░░░░░░░░░
 
 | Suite | Result |
 |---|---|
+| `test_loop` | 16/16 |
 | `test_config` | 19/19 |
 | `test_tool` | 17/17 |
 | `test_parser` | 14/14 |
