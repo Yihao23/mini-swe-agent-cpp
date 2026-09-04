@@ -39,6 +39,7 @@ mini-swe-agent-cpp/
 └── tests/
     ├── microtest.hpp       50 行的测试框架，你能一口气读完
     ├── test_smoke.cpp      15 个用例，就是规格说明书
+    ├── test_config.cpp     优先级链与 to_string 往返一致性
     ├── test_tool.cpp       工具注册表与 schema 的不变量
     ├── test_parser.cpp     循环两端的 wire format 契约
     ├── test_session.cpp    持久化 round-trip
@@ -71,6 +72,7 @@ Stage 3+ ░░░░░░░░░░░░░░░░░░░░
 
 | 测试 | 结果 |
 |---|---|
+| `test_config` | 19/19 |
 | `test_tool` | 17/17 |
 | `test_parser` | 14/14 |
 | `test_session` | 12/12 |
