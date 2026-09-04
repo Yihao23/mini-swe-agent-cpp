@@ -21,7 +21,8 @@ bool Rule::matches(std::string_view, std::string_view) const {
 
 Sandbox::Sandbox(const Config& cfg, AskFn asker)
     : cfg_(cfg), mode_(cfg.permission_mode), asker_(std::move(asker)) {
-    todo("Stage 3: Sandbox 构造 —— 解析 allow/deny 规则");
+    // TODO(Stage 3): 把 cfg.allow_rules / cfg.deny_rules 解析成 Rule 列表。
+    // 现在规则表为空 —— 只有 mode_ 这条全局基线在起作用，authorize() 还是 todo。
 }
 
 Decision Sandbox::authorize(const Tool&, const Json&) {
