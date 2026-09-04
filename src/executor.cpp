@@ -44,10 +44,14 @@ if (on_event_) on_event_(call);
 
 }
 
-std::vector<ToolResultEvent> Executor::run_batch(const std::vector<ToolCallEvent>&) {
+std::vector<ToolResultEvent> Executor::run_batch(const std::vector<ToolCallEvent>& calls) {
     // ⚠️ std::async 要显式写 std::launch::async，否则可能变成延迟执行（假并发）
     // ⚠️ 结果顺序要和入参一致
-    todo("Stage 2: Executor::run_batch");
+          std::vector<ToolResultEvent> out;
+          out.reserve(calls.size());
+      for (const auto& c : calls) out.push_back(run_one(c));
+      return out;
+
 }
 
 std::string truncate_output(std::string_view text, std::size_t limit) {
