@@ -69,7 +69,8 @@ Stage 0  ████████████████████  完成
 Stage 1  ██████████████████░░  循环端到端跑通；AnthropicClient 待写
 Stage 2  ██████████████░░░░░░  executor、工具注册表、read 工具
 Stage 7  ████████░░░░░░░░░░░░  App 装配，够跑起来了
-Stage 3+ ░░░░░░░░░░░░░░░░░░░░
+Stage 3  █████░░░░░░░░░░░░░░░  规则解析、命令拆分、危险模式
+Stage 4+ ░░░░░░░░░░░░░░░░░░░░
 ```
 
 | 测试 | 结果 |
@@ -79,7 +80,7 @@ Stage 3+ ░░░░░░░░░░░░░░░░░░░░
 | `test_tool` | 17/17 |
 | `test_parser` | 14/14 |
 | `test_session` | 12/12 |
-| `test_smoke` | 7/15 —— 其余需要 Stage 3 沙箱、edit、压缩、调度器 |
+| `test_smoke` | 8/15 —— 其余需要 Stage 3 剩余部分、edit、压缩、调度器 |
 
 `-Wall -Wextra -Wpedantic` 下零警告。
 
