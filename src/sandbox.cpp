@@ -73,17 +73,25 @@ Sandbox::Sandbox(const Config& cfg, AskFn asker)
 }
 
 Decision Sandbox::authorize(const Tool& tool, const Json& args) {
-    // ① 唯一的免检开关。注意不是 read_only —— 一个只读但会出网的工具仍要过闸。
-    if (!tool.requires_permission()) return {Action::Allow, "该工具无需授权"};
-
     const std::string subject = tool.subject(args);
 
-    // ② bash 要先拆段再逐段查，其余工具拿 subject 直接匹配规则
+    // ① deny 规则对**所有**工具生效，免检的也不例外。
+    //    requires_permission=false 的语义是「不需要询问」，不是「不受任何约束」。
+    //    放在免检检查之前，否则 `deny Read(**/.env)` 会被 read 工具自己的属性
+    //    悄悄绕过 —— 用户写了规则、配置看起来生效了，实际完全没用，且无任何提示。
+    for (const auto& r : deny_)
+        if (r.matches(tool.name(), subject))
+            return {Action::Deny, "命中 deny 规则"};
+
+    // ② 免检开关。注意不是 read_only —— 一个只读但会出网的工具仍要过闸。
+    if (!tool.requires_permission()) return {Action::Allow, "该工具无需授权"};
+
+    // ③ bash 要先拆段再逐段查，其余工具拿 subject 直接匹配规则
     const Decision d = (tool.name() == "bash")
                            ? check_command(subject)
                            : check(tool.name(), tool.read_only(), subject);
 
-    // ③ Ask 到这里才落地成 Allow / Deny
+    // ④ Ask 到这里才落地成 Allow / Deny
     return confirm(tool.name(), subject, d);
 }
 
