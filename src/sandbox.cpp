@@ -72,8 +72,19 @@ Sandbox::Sandbox(const Config& cfg, AskFn asker)
     load(cfg.deny_rules, deny_);
 }
 
-Decision Sandbox::authorize(const Tool&, const Json&) {
-    todo("Stage 3: Sandbox::authorize —— executor 唯一的入口");
+Decision Sandbox::authorize(const Tool& tool, const Json& args) {
+    // ① 唯一的免检开关。注意不是 read_only —— 一个只读但会出网的工具仍要过闸。
+    if (!tool.requires_permission()) return {Action::Allow, "该工具无需授权"};
+
+    const std::string subject = tool.subject(args);
+
+    // ② bash 要先拆段再逐段查，其余工具拿 subject 直接匹配规则
+    const Decision d = (tool.name() == "bash")
+                           ? check_command(subject)
+                           : check(tool.name(), tool.read_only(), subject);
+
+    // ③ Ask 到这里才落地成 Allow / Deny
+    return confirm(tool.name(), subject, d);
 }
 
 std::pair<fs::path, Decision> Sandbox::resolve_path(std::string_view) const {
@@ -161,12 +172,37 @@ Decision Sandbox::check(std::string_view rule_name, bool read_only,
     return {Action::Ask, "未知模式"};   // 不可达；没有它编译器警告 control reaches end
 }
 
-Decision Sandbox::confirm(std::string_view, std::string_view, Decision) {
-    todo("Stage 3: Sandbox::confirm —— 没有 asker 时怎么办？");
+Decision Sandbox::confirm(std::string_view rule_name, std::string_view subject, Decision d) {
+    if (d.action != Action::Ask) return d;
+
+    // 没有 asker = 非交互（CI、子 agent）。此时 Ask 落到 Deny，不是 Allow ——
+    // 默认往安全一边错。要在 CI 里放行，用户该显式配 --mode yolo 或 allow 规则，
+    // 而不是靠「没人可问就放行」这个隐式行为。
+    if (!asker_) return {Action::Deny, "非交互模式下无法确认"};
+
+    switch (asker_(rule_name, subject, d.reason)) {
+        case Confirm::Deny:
+            return {Action::Deny, "用户拒绝"};
+        case Confirm::Once:
+            return {Action::Allow, "用户批准一次"};
+        case Confirm::Always:
+            remember_allow(rule_name, subject);
+            return {Action::Allow, "用户批准（本会话内不再询问）"};
+    }
+    return {Action::Deny, "未知的确认结果"};
 }
 
-void Sandbox::remember_allow(std::string_view, std::string_view) {
-    todo("Stage 3: Sandbox::remember_allow");
+void Sandbox::remember_allow(std::string_view rule_name, std::string_view subject) {
+    // 设计题（sandbox.hpp:97）：批准了 `npm test`，下次 `npm test -- --watch` 算不算？
+    //
+    // 这里选**精确匹配**：只记住这一个 subject，不做前缀推广。
+    //   太宽（记成 `npm*`）→ 用户批准一次 npm test，等于放开了 npm publish
+    //   太窄（现在这样）  → 参数变一个字就要再问一次
+    // 宁可烦一点。想要更宽的授权，用户可以往 config 里写 allow 规则 —— 那是显式的。
+    Rule r{std::string(rule_name), std::string(subject)};
+    for (const auto& e : allow_)                       // 别重复堆积同一条
+        if (e.tool == r.tool && e.pattern == r.pattern) return;
+    allow_.push_back(std::move(r));
 }
 
 }  // namespace mini

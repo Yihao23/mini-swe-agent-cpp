@@ -82,7 +82,7 @@ Stage 0  ████████████████████  done
 Stage 1  ██████████████████░░  loop runs end to end; AnthropicClient still open
 Stage 2  ██████████████░░░░░░  executor, tool registry, read tool
 Stage 7  ████████░░░░░░░░░░░░  App wiring, enough to run
-Stage 3  ██████████░░░░░░░░░░  rules, command splitting, mode fallbacks
+Stage 3  ███████████████░░░░░  rules, command splitting, authorize, confirmation
 Stage 4+ ░░░░░░░░░░░░░░░░░░░░
 ```
 
@@ -93,7 +93,7 @@ Stage 4+ ░░░░░░░░░░░░░░░░░░░░
 | `test_tool` | 17/17 |
 | `test_parser` | 14/14 |
 | `test_session` | 12/12 |
-| `test_smoke` | 9/15 — the rest need the rest of Stage 3, edit, compaction, scheduler |
+| `test_smoke` | 10/15 — the rest need path containment, edit, compaction, scheduler |
 
 Builds clean under `-Wall -Wextra -Wpedantic`.
 
