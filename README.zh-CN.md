@@ -66,8 +66,9 @@ mini-swe-agent-cpp/
 
 ```
 Stage 0  ████████████████████  完成
-Stage 1  █████████████░░░░░░░  message / parser / session / FakeLlm 完成
-Stage 2  ████████████████░░░░  tool / truncate_output / run_one 完成
+Stage 1  ██████████████████░░  循环端到端跑通；AnthropicClient 待写
+Stage 2  ██████████████░░░░░░  executor、工具注册表、read 工具
+Stage 7  ████████░░░░░░░░░░░░  App 装配，够跑起来了
 Stage 3+ ░░░░░░░░░░░░░░░░░░░░
 ```
 
@@ -78,7 +79,7 @@ Stage 3+ ░░░░░░░░░░░░░░░░░░░░
 | `test_tool` | 17/17 |
 | `test_parser` | 14/14 |
 | `test_session` | 12/12 |
-| `test_smoke` | 0/15 —— 卡在 `App` 构造（Stage 7） |
+| `test_smoke` | 7/15 —— 其余需要 Stage 3 沙箱、edit、压缩、调度器 |
 
 `-Wall -Wextra -Wpedantic` 下零警告。
 

@@ -10,24 +10,57 @@ namespace mini {
 struct App::Impl {
     // 顺序敏感！被指向的对象要在前面：
     //   cfg, llm, sandbox, background, memory, skills, mcp, registry, session, ctx, agent
+      // ⚠️  声明顺序 = 构造顺序，析构逆序。被读取/被指向的必须在前面。
+      Config cfg;
+      std::unique_ptr<LlmClient> llm;
+      EventSink on_event;
+      std::vector<std::string> warnings;
+      Sandbox sandbox;                  // 构造时读 cfg.permission_mode
+      ToolRegistry registry;
+      Session session;
+      ToolContext ctx;                  // 指向上面几个
+      std::unique_ptr<Agent> agent;     // 最后 —— 依赖全部，且要最先析构
+
+            Impl(Config c, std::unique_ptr<LlmClient> l, AskFn asker, EventSink ev,
+           std::optional<Session> s)
+          : cfg(std::move(c)),
+            llm(std::move(l)),
+            on_event(std::move(ev)),
+            sandbox(cfg, std::move(asker)),
+            session(s ? std::move(*s) : Session{}) {
+      cfg.ensure_dirs();                          // ① 建目录
+      if (!llm)                                    // ② 没传就建真的客户端
+          llm = std::make_unique<AnthropicClient>(cfg);
+      session.bind(cfg.sessions_dir());            // ③ 会话落盘位置
+      registry.add(make_read_tool());              // ④ 注册工具
+      // registry.add(make_write_tool());   // TODO(Stage 2)
+
+ctx.cfg      = &cfg;                         // ⑤ 接线
+        ctx.sandbox  = &sandbox;
+        ctx.session  = &session;
+        ctx.registry = &registry;
+        agent = std::make_unique<Agent>(cfg, *llm, registry, sandbox, session, ctx, on_event);
+        
+}
+
 };
 
-App::App(Config, std::unique_ptr<LlmClient>, AskFn, EventSink, std::optional<Session>)
-    : impl_(nullptr) {
-    todo("Stage 7: App 构造 —— 把十几个模块接起来；ctx.spawn 用 lambda 捕获依赖");
-}
+App::App(Config cfg, std::unique_ptr<LlmClient> llm, AskFn asker, EventSink ev, std::optional<Session> s)
+    : impl_(std::make_unique<Impl>(std::move(cfg), std::move(llm), 
+    std::move(asker), std::move(ev), std::move(s))) {}
 
 App::~App() = default;
 
-Agent& App::agent() { todo("Stage 7: App::agent"); }
-Session& App::session() { todo("Stage 7: App::session"); }
-ToolRegistry& App::registry() { todo("Stage 7: App::registry"); }
-Sandbox& App::sandbox() { todo("Stage 7: App::sandbox"); }
-LlmClient& App::llm() { todo("Stage 7: App::llm"); }
-Memory* App::memory() { todo("Stage 7: App::memory"); }
-SkillRegistry* App::skills() { todo("Stage 7: App::skills"); }
-BackgroundManager* App::background() { todo("Stage 7: App::background"); }
-const Config& App::cfg() const { todo("Stage 7: App::cfg"); }
-const std::vector<std::string>& App::warnings() const { todo("Stage 7: App::warnings"); }
+  Agent& App::agent()               { return *impl_->agent; }
+  Session& App::session()           { return impl_->session; }
+  ToolRegistry& App::registry()     { return impl_->registry; }
+  Sandbox& App::sandbox()           { return impl_->sandbox; }
+  LlmClient& App::llm()             { return *impl_->llm; }
+  Memory* App::memory()             { return nullptr; }   // Stage 5
+  SkillRegistry* App::skills()      { return nullptr; }   // Stage 5
+  BackgroundManager* App::background() { return nullptr; }// Stage 6
+  const Config& App::cfg() const    { return impl_->cfg; }
+  const std::vector<std::string>& App::warnings() const { return impl_->warnings; }
+
 
 }  // namespace mini
