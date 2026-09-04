@@ -61,8 +61,15 @@ bool Rule::matches(std::string_view tool_name, std::string_view subject) const {
 
 Sandbox::Sandbox(const Config& cfg, AskFn asker)
     : cfg_(cfg), mode_(cfg.permission_mode), asker_(std::move(asker)) {
-    // TODO(Stage 3): 把 cfg.allow_rules / cfg.deny_rules 解析成 Rule 列表。
-    // 现在规则表为空 —— 只有 mode_ 这条全局基线在起作用，authorize() 还是 todo。
+    // 解析失败的规则直接跳过 —— 一条写错的规则不该让整个 agent 起不来。
+    // TODO(Stage 7): 把跳过的规则收集成 warning，交给 App::warnings() 提示用户。
+    auto load = [](const std::vector<std::string>& texts, std::vector<Rule>& out) {
+        out.reserve(texts.size());
+        for (const auto& t : texts)
+            if (auto r = Rule::parse(t)) out.push_back(std::move(*r));
+    };
+    load(cfg.allow_rules, allow_);
+    load(cfg.deny_rules, deny_);
 }
 
 Decision Sandbox::authorize(const Tool&, const Json&) {
@@ -108,13 +115,50 @@ std::vector<std::string> Sandbox::split_command(std::string_view cmd) {
     return segs;
 }
 
-Decision Sandbox::check_command(std::string_view) const {
-    todo("Stage 3: Sandbox::check_command");
+Decision Sandbox::check_command(std::string_view cmd) const {
+    const auto segments = split_command(cmd);
+    if (segments.empty()) return {Action::Allow, "空命令"};
+
+    // 最严格的那一段决定整条：`ls && rm -rf /` 不能因为 ls 合法就整条放行。
+    for (const auto& seg : segments) {
+        for (const auto& d : kDangerous)
+            if (std::regex_search(seg, std::regex(d.regex)))
+                return {Action::Deny, std::string("危险命令: ") + d.why};
+
+        // bash 永远算有副作用 —— 即使这一段只是 ls，下一段可能不是。
+        const Decision dec = check("Bash", /*read_only=*/false, seg);
+        if (dec.action != Action::Allow) return dec;
+    }
+    return {Action::Allow, "所有命令段都通过"};
 }
 
-Decision Sandbox::check(std::string_view, bool, std::string_view) const {
-    // ⚠️ read_only 不等于免授权（有测试专门锁这个语义）
-    todo("Stage 3: Sandbox::check");
+Decision Sandbox::check(std::string_view rule_name, bool read_only,
+                        std::string_view subject) const {
+    // ⚠️ read_only 只影响「没有规则命中时模式怎么兜底」，不是免授权开关。
+    //    免授权的是 requires_permission=false，那一步在 authorize() 最前面。
+
+    // deny 优先：显式拒绝压过一切。反过来的话 allow Bash(*) 会让所有 deny 失效。
+    for (const auto& r : deny_)
+        if (r.matches(rule_name, subject))
+            return {Action::Deny, "命中 deny 规则"};
+    for (const auto& r : allow_)
+        if (r.matches(rule_name, subject))
+            return {Action::Allow, "命中 allow 规则"};
+
+    // 没有规则命中 → 全局模式兜底
+    switch (mode_) {
+        case PermissionMode::Yolo:
+            return {Action::Allow, "yolo 模式"};
+        case PermissionMode::Auto:
+            return read_only ? Decision{Action::Allow, "只读操作"}
+                             : Decision{Action::Ask, "有副作用，需要确认"};
+        case PermissionMode::ReadOnly:
+            return read_only ? Decision{Action::Allow, "只读操作"}
+                             : Decision{Action::Deny, "只读模式下不允许有副作用的操作"};
+        case PermissionMode::Ask:
+            return {Action::Ask, "没有匹配的规则，需要确认"};
+    }
+    return {Action::Ask, "未知模式"};   // 不可达；没有它编译器警告 control reaches end
 }
 
 Decision Sandbox::confirm(std::string_view, std::string_view, Decision) {
