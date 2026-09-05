@@ -68,6 +68,7 @@ mini-swe-agent-cpp/
 Stage 0  ████████████████████  完成
 Stage 1  ██████████████████░░  循环端到端跑通；AnthropicClient 待写
 Stage 2  ████████████████░░░░  executor、工具注册表、read 和 edit
+Stage 6  ██████░░░░░░░░░░░░░░  任务调度器
 Stage 7  ████████░░░░░░░░░░░░  App 装配，够跑起来了
 Stage 3  ████████████████████  完成 —— 闸门已接进 executor
 Stage 4+ ░░░░░░░░░░░░░░░░░░░░
@@ -80,7 +81,7 @@ Stage 4+ ░░░░░░░░░░░░░░░░░░░░
 | `test_tool` | 17/17 |
 | `test_parser` | 14/14 |
 | `test_session` | 12/12 |
-| `test_smoke` | 12/15 —— 其余需要上下文压缩、调度器 |
+| `test_smoke` | 14/15 —— 只剩上下文压缩 |
 
 `-Wall -Wextra -Wpedantic` 下零警告。
 
