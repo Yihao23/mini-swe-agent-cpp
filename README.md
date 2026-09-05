@@ -12,7 +12,7 @@ ctest --test-dir build --output-on-failure
 ```
 
 `test_smoke` starts out entirely red. Each failure names the next function to
-write:
+write (all 15 pass as of the latest commit):
 
 ```
 ✗ loop_runs_tool_then_answers
@@ -81,6 +81,7 @@ something usable.
 Stage 0  ████████████████████  done
 Stage 1  ██████████████████░░  loop runs end to end; AnthropicClient still open
 Stage 2  ████████████████░░░░  executor, tool registry, read and edit
+Stage 4  ████░░░░░░░░░░░░░░░░  safe_split; compaction itself still open
 Stage 6  ██████░░░░░░░░░░░░░░  task scheduler
 Stage 7  ████████░░░░░░░░░░░░  App wiring, enough to run
 Stage 3  ████████████████████  done — the gate is wired into the executor
@@ -94,7 +95,7 @@ Stage 4+ ░░░░░░░░░░░░░░░░░░░░
 | `test_tool` | 17/17 |
 | `test_parser` | 14/14 |
 | `test_session` | 12/12 |
-| `test_smoke` | 14/15 — only context compaction is left |
+| `test_smoke` | **15/15** |
 
 Builds clean under `-Wall -Wextra -Wpedantic`.
 

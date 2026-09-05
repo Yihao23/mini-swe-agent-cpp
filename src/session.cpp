@@ -4,6 +4,7 @@
 
 #include "mini_agent/llm.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <format>
 #include <fstream>
@@ -53,10 +54,28 @@ int Session::estimated_tokens() const {
     todo("Stage 4: Session::estimated_tokens —— 序列化字节数 / 4 就够用");
 }
 
-std::size_t Session::safe_split(std::size_t) const {
-    // ⚠️ Stage 4 唯一的技术难点：切分点之后每个 tool_result 都要能配上 tool_use。
-    // 提示：往前找最近一条 Role::User 且 !has_tool_result 的消息。
-    todo("Stage 4: Session::safe_split");
+std::size_t Session::safe_split(std::size_t keep_recent) const {
+    // ⚠️ 切分点之后每个 tool_result 都要能配上它的 tool_use。切在 tool_result 上，
+    //    它的 tool_use 会被压进纪要里消失 —— 下一轮请求 400，而历史已经落盘，
+    //    --continue 回来照样 400，整个会话永久报废。
+    //
+    // 「真正的用户输入」之所以安全：它标志新一轮的开始，此刻之前的所有 tool_use
+    // 都已经拿到结果了（否则模型还在等工具，不会把话筒交回来）。切在那里，
+    // 每一对 tool_use/tool_result 要么整对留下、要么整对进纪要，不会被拆散。
+    if (messages_.size() <= keep_recent) return 0;
+
+    // 只能往前找：往后找会让保留区少于 keep_recent，把模型当前的工作上下文压掉。
+    // keep_recent==0 时 size-0 == size 会越界，夹到最后一条。
+    const std::size_t start = std::min(messages_.size() - keep_recent, messages_.size() - 1);
+    for (std::size_t i = start; i > 0; --i) {
+        const Message& m = messages_[i];
+        if (m.role == Role::User && !has_tool_result(m)) return i;
+    }
+
+    // 两个约束冲突（唯一的安全切分点在 keep_recent 范围内）→ 这次不压。
+    // 返回 0 表示空区间 [0,0)，调用方不需要额外的错误通道。
+    // 历史还会继续变长，下次触发时那个切分点自然就落在范围外了。
+    return 0;
 }
 
 bool Session::compact(LlmClient&, std::size_t) { todo("Stage 4: Session::compact"); }
