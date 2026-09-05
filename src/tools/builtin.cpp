@@ -18,6 +18,7 @@
 
 #include "mini_agent/config.hpp"
 #include "mini_agent/sandbox.hpp"
+#include "mini_agent/session.hpp"
 
 
 
@@ -83,6 +84,13 @@ class ReadTool final : public Tool {
             out += std::format("{:6}\t{}\n", lineno, line);
         }
 
+        // 记下这次读取的 mtime。edit 靠它判断「读过没有」和「读完之后有没有被人改过」。
+        if (ctx.session) {
+            std::error_code mt;
+            const auto stamp = fs::last_write_time(p, mt);
+            if (!mt) ctx.session->read_files()[p.string()] = stamp;
+        }
+
         if (lineno == 0) return ToolResult{.content = "(空文件)"};
         if (emitted == 0)
             return ToolResult{.content = std::format("(文件共 {} 行，offset {} 已越过末尾)",
@@ -111,11 +119,95 @@ class ReadTool final : public Tool {
     }
 };
 
+class EditTool final : public Tool {
+  public:
+    std::string_view name() const override { return "edit"; }
+
+    std::string_view description() const override {
+        return "把文件里的 old_string 替换成 new_string。必须先用 read 读过这个文件。"
+               "old_string 必须在文件中唯一出现 —— 不唯一时多带几行上下文。";
+    }
+
+    Json input_schema() const override {
+        return Json{
+            {"type", "object"},
+            {"properties",
+             {{"path", {{"type", "string"}, {"description", "要修改的文件"}}},
+              {"old_string", {{"type", "string"}, {"description", "被替换的原文，必须唯一"}}},
+              {"new_string", {{"type", "string"}, {"description", "替换成什么"}}}}},
+            {"required", Json::array({"path", "old_string", "new_string"})},
+        };
+    }
+
+    bool read_only() const override { return false; }
+    bool requires_permission() const override { return true; }
+
+    /// ⚠️ 必须 override。默认实现取「第一个字符串参数」，而 nlohmann 按 key 字母序
+    ///    遍历：new_string < old_string < path，默认会把**要写入的内容**当成审查对象，
+    ///    于是 Write(src/**) 这类规则永远匹配不上 —— 沙箱静默失效。
+    std::string subject(const Json& args) const override {
+        return args.value("path", std::string{});
+    }
+
+    ToolResult run(const Json& args, ToolContext& ctx) override {
+        const auto rel = args.value("path", std::string{});
+        const auto old_s = args.value("old_string", std::string{});
+        const auto new_s = args.value("new_string", std::string{});
+        if (rel.empty()) return ToolResult::error("缺少 path 参数");
+        if (old_s.empty()) return ToolResult::error("old_string 不能为空");
+
+        const auto [p, decision] = ctx.sandbox->resolve_path(rel);
+        if (!decision.allowed()) return ToolResult::error(decision.reason + ": " + rel);
+
+        std::error_code ec;
+        if (!fs::exists(p, ec)) return ToolResult::error("文件不存在: " + rel);
+
+        // ① 必须先 read —— 否则模型是在凭想象改文件
+        if (!ctx.session) return ToolResult::error("没有会话上下文，无法确认是否已 read");
+        auto& seen = ctx.session->read_files();
+        const auto it = seen.find(p.string());
+        if (it == seen.end())
+            return ToolResult::error("必须先用 read 读过 " + rel + " 才能 edit");
+
+        // ② 陈旧检查：read 之后文件被外部改过，这次 edit 会覆盖掉别人的改动
+        const auto now = fs::last_write_time(p, ec);
+        if (!ec && now != it->second)
+            return ToolResult::error(rel + " 在你 read 之后被修改过，请重新 read 再 edit");
+
+        std::ifstream in(p, std::ios::binary);
+        if (!in) return ToolResult::error("打不开: " + rel);
+        std::string content((std::istreambuf_iterator<char>(in)), {});
+        in.close();
+
+        // ③ 唯一性：出现多次时只替换第一个，模型会以为全改了
+        const auto first = content.find(old_s);
+        if (first == std::string::npos)
+            return ToolResult::error("在 " + rel + " 中找不到 old_string");
+        if (content.find(old_s, first + old_s.size()) != std::string::npos)
+            return ToolResult::error("old_string 在 " + rel +
+                                     " 中出现多次，请多带几行上下文使其唯一");
+
+        content.replace(first, old_s.size(), new_s);
+
+        std::ofstream out(p, std::ios::binary | std::ios::trunc);
+        if (!out) return ToolResult::error("无法写入: " + rel);
+        out << content;
+        out.close();
+
+        // ④ 更新时间戳 —— 这次改动是我们自己做的，不该在下一次 edit 时被当成"被人改过"
+        const auto stamp = fs::last_write_time(p, ec);
+        if (!ec) it->second = stamp;
+
+        const auto line = 1 + std::count(content.begin(), content.begin() + first, '\n');
+        return ToolResult{.content = std::format("已修改 {}（第 {} 行附近）", rel, line)};
+    }
+};
+
 }  // namespace
 
 ToolPtr make_read_tool() { return std::make_shared<ReadTool>(); }
 ToolPtr make_write_tool() { todo("Stage 2: write"); }
-ToolPtr make_edit_tool() { todo("Stage 2: edit —— 陈旧检查 + old_string 唯一性"); }
+ToolPtr make_edit_tool() { return std::make_shared<EditTool>(); }
 ToolPtr make_glob_tool() { todo("Stage 2: glob —— 按修改时间倒序"); }
 ToolPtr make_grep_tool() { todo("Stage 2: grep —— std::regex 够用，注意跳过二进制/大文件"); }
 ToolPtr make_bash_tool() { todo("Stage 2: bash —— 调 run_shell，权限已由 executor 过闸"); }

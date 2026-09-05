@@ -80,7 +80,7 @@ something usable.
 ```
 Stage 0  ████████████████████  done
 Stage 1  ██████████████████░░  loop runs end to end; AnthropicClient still open
-Stage 2  ██████████████░░░░░░  executor, tool registry, read tool
+Stage 2  ████████████████░░░░  executor, tool registry, read and edit
 Stage 7  ████████░░░░░░░░░░░░  App wiring, enough to run
 Stage 3  ████████████████████  done — the gate is wired into the executor
 Stage 4+ ░░░░░░░░░░░░░░░░░░░░
@@ -93,7 +93,7 @@ Stage 4+ ░░░░░░░░░░░░░░░░░░░░
 | `test_tool` | 17/17 |
 | `test_parser` | 14/14 |
 | `test_session` | 12/12 |
-| `test_smoke` | 11/15 — the rest need the edit tool, compaction, and the scheduler |
+| `test_smoke` | 12/15 — the rest need compaction and the scheduler |
 
 Builds clean under `-Wall -Wextra -Wpedantic`.
 

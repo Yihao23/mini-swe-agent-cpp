@@ -33,6 +33,7 @@ struct App::Impl {
           llm = std::make_unique<AnthropicClient>(cfg);
       session.bind(cfg.sessions_dir());            // ③ 会话落盘位置
       registry.add(make_read_tool());              // ④ 注册工具
+      registry.add(make_edit_tool());
       // registry.add(make_write_tool());   // TODO(Stage 2)
 
 ctx.cfg      = &cfg;                         // ⑤ 接线
