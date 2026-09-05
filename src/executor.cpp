@@ -16,7 +16,18 @@ ToolResultEvent Executor::run_one(const ToolCallEvent& call) {
 const auto t0 = std::chrono::steady_clock::now();
 if (on_event_) on_event_(call); 
       if (Tool* tool = registry_.get(call.name)) {
-          // TODO(Stage 3): sandbox.authorize(*tool, call.input) —— 权限拒绝也走 error 结果
+          // 权限闸门。sandbox.hpp 那条铁律：工具不做权限判断，executor 在调用前
+          // 统一问这一层 —— 散在各个工具里就永远不知道覆盖全不全。
+          const Decision d = ctx_.sandbox->authorize(*tool, call.input);
+          if (!d.allowed()) {
+              // 拒绝也是一条 is_error 结果，不是异常 —— 模型要能看到原因并改做法
+              r.is_error = true;
+              r.output = "权限拒绝: " + d.reason;
+              r.duration_sec =
+                  std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+              if (on_event_) on_event_(r);
+              return r;
+          }
           try {
               const ToolResult res = tool->run(call.input, ctx_);
               r.output   = truncate_output(res.content, ctx_.cfg->max_output_chars);

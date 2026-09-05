@@ -95,9 +95,24 @@ Decision Sandbox::authorize(const Tool& tool, const Json& args) {
     return confirm(tool.name(), subject, d);
 }
 
-std::pair<fs::path, Decision> Sandbox::resolve_path(std::string_view) const {
-    // ⚠️ weakly_canonical（文件可能不存在），按路径分量比前缀，别按字符串比
-    todo("Stage 3: Sandbox::resolve_path");
+std::pair<fs::path, Decision> Sandbox::resolve_path(std::string_view raw) const {
+    if (raw.empty()) return {{}, {Action::Deny, "路径为空"}};
+
+    // ⚠️ weakly_canonical 而不是 canonical —— 写文件时目标常常还不存在，
+    //    canonical 会直接抛 filesystem_error。weakly_canonical 对已存在的前缀
+    //    解析符号链接，剩下的部分只做词法规范化。
+    std::error_code ec;
+    const fs::path p = fs::weakly_canonical(cfg_.workdir / raw, ec);
+    if (ec) return {{}, {Action::Deny, "路径无法解析"}};
+
+    // ⚠️ 按路径**分量**比，不能按字符串比前缀 ——
+    //    "/work" 是 "/workspace" 的字符串前缀，但 /workspace 显然在 workdir 之外。
+    //    lexically_relative 算出相对路径，第一个分量是 ".." 就说明跑出去了。
+    const fs::path rel = p.lexically_relative(cfg_.workdir);
+    if (rel.empty() || rel.native() == "..") return {p, {Action::Deny, "路径越界"}};
+    if (!rel.empty() && *rel.begin() == "..") return {p, {Action::Deny, "路径越界"}};
+
+    return {p, {Action::Allow, {}}};
 }
 
 std::vector<std::string> Sandbox::split_command(std::string_view cmd) {

@@ -17,6 +17,7 @@
 #include <system_error>
 
 #include "mini_agent/config.hpp"
+#include "mini_agent/sandbox.hpp"
 
 
 
@@ -55,10 +56,12 @@ class ReadTool final : public Tool {
         const auto rel = args.value("path", std::string{});
         if (rel.empty()) return ToolResult::error("缺少 path 参数");
 
-        // TODO(Stage 3): 换成 ctx.sandbox->resolve_path(rel) —— 它负责挡 ../../etc/passwd
+        // 路径边界由 sandbox 统一判定 —— 模型给的 path 是不可信输入，
+        // `..`、符号链接、绝对路径都要挡在这里。
+        const auto [p, decision] = ctx.sandbox->resolve_path(rel);
+        if (!decision.allowed()) return ToolResult::error(decision.reason + ": " + rel);
+
         std::error_code ec;
-        const fs::path p = fs::weakly_canonical(ctx.cfg->workdir / rel, ec);
-        if (ec) return ToolResult::error("路径无法解析: " + rel);
         if (!fs::exists(p, ec)) return ToolResult::error("文件不存在: " + rel);
 
         if (fs::is_directory(p, ec)) return list_directory(p, rel);
