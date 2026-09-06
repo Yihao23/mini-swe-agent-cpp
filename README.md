@@ -79,7 +79,7 @@ something usable.
 
 ```
 Stage 0  ████████████████████  done
-Stage 1  ████████████████████  loop and the real client; streaming still open
+Stage 1  ████████████████████  loop, the real client, SSE streaming
 Stage 2  ████████████████░░░░  executor, tool registry, read and edit
 Stage 4  ████░░░░░░░░░░░░░░░░  safe_split; compaction itself still open
 Stage 6  ██████░░░░░░░░░░░░░░  task scheduler
@@ -112,8 +112,8 @@ export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 Without a task argument it enters a REPL; `/help` lists the slash commands.
-`--mode yolo` skips the permission prompts. Streaming is not wired up yet, so
-answers arrive in one piece.
+`--mode yolo` skips the permission prompts. Answers stream in as they are
+generated when a renderer is attached.
 
 ## Dependencies
 
