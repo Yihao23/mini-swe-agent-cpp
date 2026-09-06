@@ -45,7 +45,21 @@ struct ToolResult {
     Json metadata = Json::object();
 
     /// @brief Build a failed result.
-    /// @param msg Why it failed — the model reads this and adjusts.
+    ///
+    /// @param msg Why it failed. The model reads this and picks another
+    ///        approach, so "file not found: a.py" beats "error".
+    /// @return A ToolResult with is_error set.
+    ///
+    /// @note Forgetting the flag is the failure to watch for: the model then
+    ///       treats the message as ordinary output and reasons from it as if
+    ///       the tool had succeeded.
+    ///
+    /// @code{.test}
+    /// ToolResult::error("file not found").is_error      ==> true
+    /// ToolResult::error("file not found").content       ==> "file not found"
+    /// ToolResult::error("x").metadata.is_object()       ==> true
+    /// ToolResult{.content = "ok"}.is_error              ==> false
+    /// @endcode
     static ToolResult error(std::string msg);
 };
 
@@ -137,12 +151,19 @@ class Tool {
     ///          Write(src/**) never matches. Any tool with more than one string
     ///          parameter must override this. `edit` does.
     ///
-    /// @code
-    /// // read: one string parameter, the default is right
-    /// {"path":"a.py"}                    → "a.py"
-    /// // write: two, and the default picks the wrong one
-    /// {"path":"a.py","content":"x = 1"}  → "x = 1"   ← not the subject
+    /// @code{.test}
+    /// @setup const DocTool t;
+    /// t.subject(Json{{"path","a.py"}})                        ==> "a.py"
+    /// t.subject(Json{{"limit",100},{"path","a.py"}})          ==> "a.py"
+    /// t.subject(Json{{"content","x = 1"},{"path","a.py"}})    ==> "x = 1"
+    /// t.subject(Json::array())                                ==> ""
+    /// t.subject(Json::object())                               ==> ""
+    /// t.subject(Json())                                       ==> ""
     /// @endcode
+    ///
+    /// @note The third assertion pins the trap deliberately: `content` sorts
+    ///       ahead of `path`, so a tool with several string parameters gets the
+    ///       wrong subject unless it overrides this.
     ///
     /// 这次调用的"审查对象" —— 沙箱只看这个字符串做规则匹配。
     virtual std::string subject(const Json& args) const;
@@ -160,7 +181,13 @@ class Tool {
     virtual ToolResult run(const Json& args, ToolContext& ctx) = 0;
 
     /// @brief This tool as one entry of the API's `tools` array.
-    /// @return `{name, description, input_schema}`
+    /// @return `{"name":..., "description":..., "input_schema":...}`
+    ///
+    /// @code
+    /// // {"name":"read",
+    /// //  "description":"读取文件内容，带行号。...",
+    /// //  "input_schema":{"type":"object","properties":{...},"required":["path"]}}
+    /// @endcode
     Json schema() const;
 };
 
@@ -170,28 +197,72 @@ using ToolPtr = std::shared_ptr<Tool>;
 class ToolRegistry {
   public:
     /// @brief Register a tool.
+    /// @param tool Ownership is shared, so a Stage 6 subset can point at the
+    ///        same instance without copying it.
     void add(ToolPtr tool);
 
     /// @brief Look a tool up by name.
+    ///
+    /// @param name The name the model used.
     /// @return nullptr when there is no such tool. The executor turns that into
     ///         an error result listing what is available, so the model can
     ///         correct its own typo on the next turn.
+    ///
+    /// @note Linear scan. With a dozen tools that is nothing next to the file
+    ///       I/O the call is about to do.
+    ///
+    /// @code{.test}
+    /// @setup ToolRegistry r;
+    /// @setup r.add(std::make_shared<DocTool>("read"));
+    /// (r.get("read") != nullptr)                    ==> true
+    /// (r.get("nope") == nullptr)                    ==> true
+    /// (r.get("") == nullptr)                        ==> true
+    /// r.size()                                      ==> 1u
+    /// @endcode
     Tool* get(std::string_view name) const;      // 找不到返回 nullptr
 
     /// @brief Every registered name, in registration order.
+    /// @note Used to tell the model what it could have called when it names
+    ///       something that does not exist.
     std::vector<std::string> names() const;
 
     /// @brief Non-owning pointers to every tool.
+    ///
+    /// @note vector<Tool*> rather than vector<Tool&> — a container of references
+    ///       is ill-formed, since a container needs to form pointers to its
+    ///       elements and there is no such thing as a pointer to a reference.
+    ///       Values would not work either: callers need to invoke run(), which
+    ///       is non-const.
     std::vector<Tool*> all() const;
 
     /// @brief The `tools` array for a request.
     ///
     /// @return A JSON array of complete schemas, **sorted by name**.
     ///
+    /// @warning An object here rather than an array throws on push_back, and
+    ///          `"tools": {...}` is not what the API accepts either.
     /// @warning The sort is not cosmetic. Tool definitions sit near the front of
     ///          the request and prompt caching matches a byte-exact prefix, so a
     ///          different order means paying full price for system and tools
-    ///          every turn. Nothing reports it — it shows up on the bill.
+    ///          every turn. Registration order is not stable across builds or
+    ///          refactors. Nothing reports it — it shows up on the bill.
+    ///
+    /// @code{.test}
+    /// @setup ToolRegistry r;
+    /// @setup r.add(std::make_shared<DocTool>("write"));
+    /// @setup r.add(std::make_shared<DocTool>("read"));
+    /// @setup r.add(std::make_shared<DocTool>("bash"));
+    /// @setup const Json s = r.schemas();
+    /// s.is_array()                                  ==> true
+    /// s.size()                                      ==> 3u
+    /// s.at(0).value("name", std::string{})          ==> "bash"
+    /// s.at(1).value("name", std::string{})          ==> "read"
+    /// s.at(2).value("name", std::string{})          ==> "write"
+    /// s.at(0).contains("description")               ==> true
+    /// s.at(0).contains("input_schema")              ==> true
+    /// r.schemas().dump()                            ==> s.dump()
+    /// ToolRegistry{}.schemas().is_array()           ==> true
+    /// @endcode
     ///
     /// 给 API 的 tools 数组。
     Json schemas() const;
@@ -205,6 +276,7 @@ class ToolRegistry {
     /// 挑出一部分组成新注册表 —— Stage 6 给子 agent 收窄权限用。
     ToolRegistry subset(const std::vector<std::string>& names) const;
 
+    /// @brief How many tools are registered.
     std::size_t size() const;
 
   private:

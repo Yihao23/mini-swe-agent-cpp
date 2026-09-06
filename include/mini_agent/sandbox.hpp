@@ -68,12 +68,19 @@ struct Rule {
     /// @note Not an exception: these strings come from a hand-edited config
     ///       file, so a typo has to produce a readable message rather than stop
     ///       the agent from starting. The Sandbox constructor skips what fails.
+    /// @note The trailing `:*` is sugar for a prefix — `git status:*` becomes
+    ///       the glob `git status*`. Writing the glob directly works
+    ///       identically; the colon just makes the intent visible and stops
+    ///       someone from writing `Bash(git status)` and getting an exact match
+    ///       they did not want.
     ///
-    /// @code
-    /// Rule::parse("Bash");                 // {tool="Bash", pattern=nullopt}
-    /// Rule::parse("Write(src/**)");        // {tool="Write", pattern="src/**"}
-    /// Rule::parse("Bash(git status:*)");   // {tool="Bash", pattern="git status*"}
-    /// Rule::parse("Bash(unclosed");        // nullopt
+    /// @code{.test}
+    /// Rule::parse("Bash")->tool                            ==> "Bash"
+    /// Rule::parse("Bash")->pattern.has_value()             ==> false
+    /// Rule::parse("Write(src/**)")->pattern.value()        ==> "src/**"
+    /// Rule::parse("Bash(git status:*)")->pattern.value()   ==> "git status*"
+    /// Rule::parse("Bash(unclosed").has_value()             ==> false
+    /// Rule::parse("(nothing)").has_value()                 ==> false
     /// @endcode
     ///
     /// 约定：结尾 `:*` 表示前缀匹配（`git status:*` → glob `git status*`）
@@ -90,13 +97,20 @@ struct Rule {
     /// @note No pattern means the whole tool matches, whatever the subject.
     /// @note fnmatch is called without FNM_PATHNAME, so `*` crosses `/` —
     ///       Write(src/**) has to reach src/a/b.py, and with the flag set it
-    ///       would stop at the first slash.
+    ///       would stop at the first slash. The side effect is that `src/*` and
+    ///       `src/**` behave identically here.
+    /// @note fnmatch takes a const char*, so the subject is copied —
+    ///       string_view carries no guarantee of a terminator. A handful of
+    ///       rules per call against one file operation; not worth optimising.
     ///
-    /// @code
-    /// Rule::parse("Write(src/**)")->matches("write", "src/a/b.py");  // true
-    /// Rule::parse("Write(src/**)")->matches("read",  "src/a.py");    // false
-    /// Rule::parse("Bash(git status:*)")->matches("bash", "git status -s"); // true
-    /// Rule::parse("Bash(git status:*)")->matches("bash", "git push");      // false
+    /// @code{.test}
+    /// Rule::parse("Write(src/**)")->matches("write", "src/a/b.py")        ==> true
+    /// Rule::parse("Write(src/**)")->matches("Write", "src/a/b.py")        ==> true
+    /// Rule::parse("Write(src/**)")->matches("read",  "src/a.py")          ==> false
+    /// Rule::parse("Write(src/**)")->matches("write", "docs/a.md")         ==> false
+    /// Rule::parse("Bash(git status:*)")->matches("bash", "git status -s") ==> true
+    /// Rule::parse("Bash(git status:*)")->matches("bash", "git push")      ==> false
+    /// Rule::parse("Bash")->matches("bash", "anything at all")             ==> true
     /// @endcode
     ///
     /// 工具名要对上，pattern 走 glob。
@@ -171,6 +185,17 @@ class Sandbox {
     /// @note The exemption is requires_permission(), not read_only(). A tool
     ///       that only reads but reaches the network is read-only and still has
     ///       to pass the gate — a smoke test pins that distinction.
+    ///
+    /// @code{.test}
+    /// @setup Config cfg = doc_config(PermissionMode::Ask);
+    /// @setup cfg.deny_rules = {"Doc(**.env)"};
+    /// @setup Sandbox sb(cfg, {});
+    /// @setup DocTool exempt{"doc", true, false};   // read_only, no permission needed
+    /// @setup DocTool gated{"doc", true, true};     // read_only, but gated
+    /// sb.authorize(exempt, Json{{"path","src/a.py"}}).allowed()      ==> true
+    /// sb.authorize(exempt, Json{{"path","secrets/.env"}}).allowed()  ==> false
+    /// sb.authorize(gated,  Json{{"path","src/a.py"}}).allowed()      ==> false
+    /// @endcode
     Decision authorize(const Tool& tool, const Json& args);
 
     // -- 路径边界 ------------------------------------------------------------
@@ -189,11 +214,19 @@ class Sandbox {
     ///       components. A string prefix test would accept /workspace for a
     ///       workdir of /work.
     ///
-    /// @code
-    /// // workdir = /work
-    /// resolve_path("src/a.py");            // {/work/src/a.py, Allow}
-    /// resolve_path("./src/../src/a.py");   // {/work/src/a.py, Allow}
-    /// resolve_path("../../../etc/passwd"); // {/etc/passwd,    Deny "路径越界"}
+    /// @code{.test}
+    /// @setup const Config cfg = doc_config();
+    /// @setup const Sandbox sb(cfg, {});
+    /// sb.resolve_path("src/a.py").second.allowed()             ==> true
+    /// sb.resolve_path("./src/../src/a.py").second.allowed()    ==> true
+    /// sb.resolve_path("src/a.py").first                        ==> cfg.workdir / "src/a.py"
+    /// sb.resolve_path("../../../etc/passwd").second.allowed()  ==> false
+    /// sb.resolve_path("").second.allowed()                     ==> false
+    ///
+    /// // The sibling whose name starts with the workdir's. A string-prefix test
+    /// // would accept this; comparing path components rejects it.
+    /// @setup const std::string sibling = cfg.workdir.string() + "-other/x.py";
+    /// sb.resolve_path(sibling).second.allowed()                ==> false
     /// @endcode
     ///
     /// 把模型给的路径解析成绝对路径，并检查是否越界。
@@ -215,11 +248,14 @@ class Sandbox {
     /// @note Separators inside quotes are left alone: `git commit -m 'a; b'` is
     ///       one command, and splitting it would hand the matcher half of one.
     ///
-    /// @code
-    /// split_command("ls && rm -rf / ; echo done | grep x");
-    /// // {"ls", "rm -rf /", "echo done", "grep x"}
-    /// split_command("git commit -m 'a; b'");
-    /// // {"git commit -m 'a; b'"}   — the quoted ; is data
+    /// @code{.test}
+    /// @setup const auto segs = Sandbox::split_command("ls && rm -rf / ; echo done | grep x");
+    /// segs.size()                                              ==> 4u
+    /// segs.at(0)                                               ==> "ls"
+    /// segs.at(1)                                               ==> "rm -rf /"
+    /// segs.at(3)                                               ==> "grep x"
+    /// Sandbox::split_command("git commit -m 'a; b'").size()    ==> 1u
+    /// Sandbox::split_command("npm test").size()                ==> 1u
     /// @endcode
     ///
     /// 按 && || ; | 拆段。
@@ -234,6 +270,18 @@ class Sandbox {
     /// @note One bad segment condemns the line. `git status && rm -rf /` matches
     ///       an allow rule on its first segment, and permitting it on that basis
     ///       is precisely the hole split_command exists to close.
+    /// @note bash counts as having side effects for every segment. This one may
+    ///       be a bare `ls`, but the next one need not be.
+    ///
+    /// @code{.test}
+    /// @setup Config cfg = doc_config(PermissionMode::Ask);
+    /// @setup cfg.allow_rules = {"Bash(git status:*)"};
+    /// @setup const Sandbox sb(cfg, {});
+    /// sb.check_command("git status --short").action     ==> Action::Allow
+    /// sb.check_command("npm publish").action            ==> Action::Ask
+    /// sb.check_command("sudo rm -rf /").action          ==> Action::Deny
+    /// sb.check_command("git status && rm -rf /").action ==> Action::Deny
+    /// @endcode
     Decision check_command(std::string_view cmd) const;
 
     /// @brief Match one call against the rules, falling back to the mode.
@@ -253,6 +301,19 @@ class Sandbox {
     /// @note read_only only picks among those fallbacks. It is not an
     ///       exemption — that is requires_permission(), handled in authorize().
     ///
+    /// @code{.test}
+    /// @setup const Config yolo = doc_config(PermissionMode::Yolo);
+    /// @setup const Config autom = doc_config(PermissionMode::Auto);
+    /// @setup const Config ro = doc_config(PermissionMode::ReadOnly);
+    /// @setup const Config ask = doc_config(PermissionMode::Ask);
+    /// Sandbox(yolo,  {}).check("x", false, "s").action  ==> Action::Allow
+    /// Sandbox(autom, {}).check("x", false, "s").action  ==> Action::Ask
+    /// Sandbox(autom, {}).check("x", true,  "s").action  ==> Action::Allow
+    /// Sandbox(ro,    {}).check("x", false, "s").action  ==> Action::Deny
+    /// Sandbox(ro,    {}).check("x", true,  "s").action  ==> Action::Allow
+    /// Sandbox(ask,   {}).check("x", true,  "s").action  ==> Action::Ask
+    /// @endcode
+    ///
     /// 通用工具判定。
     Decision check(std::string_view rule_name, bool read_only, std::string_view subject) const;
 
@@ -267,6 +328,8 @@ class Sandbox {
     ///       toward refusal is the point: getting a run through unattended
     ///       should mean writing `--mode yolo` or an allow rule, an explicit
     ///       decision, rather than relying on "nobody was around to ask".
+    /// @note Always is recorded through remember_allow, so the same subject is
+    ///       not asked about twice in one session.
     Decision confirm(std::string_view rule_name, std::string_view subject, Decision d);
 
     /// @brief Record a session-scoped allow after the user answered Always.
@@ -280,13 +343,22 @@ class Sandbox {
     ///       "allow this family". Re-asking when an argument changes is the
     ///       cheaper mistake, and an operator who wants the broader grant can
     ///       write an allow rule, which is explicit.
+    /// @note Duplicates are skipped so the list does not grow on repeated
+    ///       answers to the same question.
     ///
-    /// @code
-    /// // user answers Always to `npm test`
-    /// authorize(bash, {{"command","npm test"}});            // asked once
-    /// authorize(bash, {{"command","npm test"}});            // not asked again
-    /// authorize(bash, {{"command","npm test -- --watch"}}); // asked — different subject
-    /// authorize(bash, {{"command","npm publish"}});         // asked — not covered
+    /// @code{.test}
+    /// @setup Config cfg = doc_config(PermissionMode::Ask);
+    /// @setup int asked = 0;
+    /// @setup Sandbox sb(cfg, [&asked](auto, auto, auto) { ++asked; return Confirm::Always; });
+    /// @setup DocTool bash{"bash", false, true};
+    /// @setup sb.authorize(bash, Json{{"command","npm test"}});
+    /// asked                                                        ==> 1
+    /// @setup sb.authorize(bash, Json{{"command","npm test"}});
+    /// asked                                                        ==> 1
+    /// @setup sb.authorize(bash, Json{{"command","npm test -- --watch"}});
+    /// asked                                                        ==> 2
+    /// @setup sb.authorize(bash, Json{{"command","npm publish"}});
+    /// asked                                                        ==> 3
     /// @endcode
     ///
     /// 用户选了"以后都允许"。
@@ -312,9 +384,18 @@ class Sandbox {
 /// 永远拒绝的命令模式。想想还该加什么。
 /// rm -rf / sudo / mkfs / dd if= / fork bomb / chmod 777 / curl|sh / 裸设备 / push --force
 struct DangerPattern {
-    const char* regex;
-    const char* why;
+    const char* regex;   ///< ECMAScript regex, matched against one command segment.
+    const char* why;     ///< Shown to the model, so it says what to avoid.
 };
-extern const std::vector<DangerPattern> kDangerous;   // TODO(Stage 3): sandbox.cpp
+
+/// @brief Commands refused before any rule or mode is consulted.
+///
+/// @note Not configurable on purpose. An agent can be talked into things — it
+///       reads files, and a file can contain instructions. This layer holds
+///       whatever the configuration and the model both say.
+/// @note Regexes rather than exact strings: `rm -rf /` has a dozen spellings.
+///
+/// 永远拒绝，不问、不看规则、不看模式。挡的是「一旦执行就无法挽回」的操作。
+extern const std::vector<DangerPattern> kDangerous;
 
 }  // namespace mini

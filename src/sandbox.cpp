@@ -1,4 +1,7 @@
 // 【Stage 3】沙箱 / 权限。
+//
+// 契约（@brief / @param / @note / @warning / 可执行示例）全部写在
+// include/mini_agent/sandbox.hpp。这里只留实现层面的注释。
 
 #include "mini_agent/sandbox.hpp"
 
@@ -11,14 +14,7 @@
 
 namespace mini {
 
-/// @brief Commands refused before any rule or mode is consulted.
-///
-/// @note Not configurable on purpose. An agent can be talked into things — it
-///       reads files, and a file can contain instructions. This layer holds
-///       whatever the configuration and the model both say.
-/// @note Regexes rather than exact strings: `rm -rf /` has a dozen spellings.
-///
-/// 永远拒绝，不问、不看规则、不看模式。这一层挡的是「一旦执行就无法挽回」的操作。
+// 正则而不是精确字符串 —— `rm -rf /` 有十几种写法。
 const std::vector<DangerPattern> kDangerous = {
     {R"(\brm\s+(-[a-zA-Z]*\s+)*-?[rf]{1,2}\s+/\s*$)", "rm -rf /"},
     {R"(\brm\s+-[a-zA-Z]*r[a-zA-Z]*f|\brm\s+-[a-zA-Z]*f[a-zA-Z]*r)", "递归强制删除"},
@@ -32,26 +28,6 @@ const std::vector<DangerPattern> kDangerous = {
     {R"(\bgit\s+push\b.*(--force|-f)\b)", "强制推送"},
 };
 
-/// @brief Parse one rule string from the config file.
-///
-/// @param text `Bash`, `Write(src/**)` or `Bash(git status:*)`.
-/// @return nullopt when the text does not parse.
-///
-/// @note Returning nullopt rather than throwing: these strings are hand-edited,
-///       so a typo has to produce a readable message instead of an exception
-///       during construction. The constructor skips what fails.
-/// @note The trailing `:*` is sugar for a prefix — `git status:*` becomes the
-///       glob `git status*`. Writing the glob directly works identically; the
-///       colon just makes the intent visible and stops someone from writing
-///       `Bash(git status)` and getting an exact match they did not want.
-///
-/// @code
-/// Rule::parse("Bash");                //  {tool="Bash",  pattern=nullopt}
-/// Rule::parse("Write(src/**)");       //  {tool="Write", pattern="src/**"}
-/// Rule::parse("Bash(git status:*)");  //  {tool="Bash",  pattern="git status*"}
-/// Rule::parse("Bash(unclosed");       //  nullopt — unbalanced
-/// Rule::parse("(nothing)");           //  nullopt — no tool name
-/// @endcode
 std::optional<Rule> Rule::parse(std::string_view text) {
     // 三种形式：Bash / Write(src/**) / Bash(git status:*)
     auto is_space = [](char c) { return std::isspace(static_cast<unsigned char>(c)) != 0; };
@@ -73,21 +49,6 @@ std::optional<Rule> Rule::parse(std::string_view text) {
     return Rule{std::move(tool), std::move(pat)};
 }
 
-/// @brief Does this rule cover the given call?
-///
-/// @param tool_name The tool being invoked.
-/// @param subject   What Tool::subject() returned.
-/// @return true when the name matches and the glob accepts the subject.
-///
-/// @note Names compare case-insensitively — config files say `Bash`, and
-///       Tool::name() returns `bash`.
-/// @note fnmatch without FNM_PATHNAME, so `*` crosses `/`. With the flag,
-///       Write(src/**) would stop at the first slash and never reach
-///       src/a/b.py. The side effect is that `src/*` and `src/**` behave
-///       identically here.
-/// @note fnmatch takes a const char*, so the subject is copied — string_view
-///       carries no guarantee of a terminator. A handful of rules per call
-///       against one file operation; not worth optimising.
 bool Rule::matches(std::string_view tool_name, std::string_view subject) const {
     // 配置里写 "Bash"，Tool::name() 返回 "bash" —— 工具名大小写不敏感
     if (tool.size() != tool_name.size()) return false;
@@ -101,14 +62,6 @@ bool Rule::matches(std::string_view tool_name, std::string_view subject) const {
     return ::fnmatch(pattern->c_str(), std::string(subject).c_str(), 0) == 0;
 }
 
-/// @brief Parse the configured rules and record the baseline mode.
-///
-/// @param cfg   ⚠️ Held by reference; must outlive this sandbox.
-/// @param asker How to ask a human; empty means non-interactive.
-///
-/// @note Rules that fail to parse are skipped rather than fatal — one typo
-///       should not stop the agent from starting. Collecting them into
-///       App::warnings() so the user hears about it is left for Stage 7.
 Sandbox::Sandbox(const Config& cfg, AskFn asker)
     : cfg_(cfg), mode_(cfg.permission_mode), asker_(std::move(asker)) {
     // 解析失败的规则直接跳过 —— 一条写错的规则不该让整个 agent 起不来。
@@ -122,32 +75,6 @@ Sandbox::Sandbox(const Config& cfg, AskFn asker)
     load(cfg.deny_rules, deny_);
 }
 
-/// @brief The executor's single entry point into this layer.
-///
-/// @param tool The tool about to run.
-/// @param args What the model supplied.
-/// @return Allow or Deny — never Ask, confirm() has already resolved it.
-///
-/// @note deny is scanned **before** the exemption. requires_permission() ==
-///       false means "do not ask", not "unconstrained". With the checks the
-///       other way round, `deny Read(**.env)` parsed cleanly, matched when
-///       tested directly, and never fired — read declares itself exempt and
-///       authorize returned on its first line.
-/// @note The exemption is requires_permission(), not read_only(). A tool that
-///       only reads but reaches the network is read-only and still passes
-///       through the gate.
-/// @note bash alone goes to check_command: its subject is a whole command line
-///       that may hide several commands. Every other subject is atomic — a
-///       path cannot smuggle a second operation into itself.
-///
-/// @code
-/// // read: requires_permission() == false
-/// authorize(read, {{"path","src/a.py"}});    // Allow "该工具无需授权"
-/// authorize(read, {{"path","secrets/.env"}}); // Deny  — with deny Read(**.env)
-///
-/// // fetch: read_only but requires_permission
-/// authorize(fetch, {{"url","https://x"}});   // Deny in a non-interactive run
-/// @endcode
 Decision Sandbox::authorize(const Tool& tool, const Json& args) {
     const std::string subject = tool.subject(args);
 
@@ -171,26 +98,6 @@ Decision Sandbox::authorize(const Tool& tool, const Json& args) {
     return confirm(tool.name(), subject, d);
 }
 
-/// @brief Resolve an untrusted path and check it stays inside workdir.
-///
-/// @param raw The path as the model wrote it.
-/// @return The resolved absolute path plus the verdict.
-///
-/// @note weakly_canonical rather than canonical: write targets usually do not
-///       exist yet, and canonical throws on a path that is not there. It
-///       resolves symlinks over the part that does exist and normalises the
-///       rest lexically.
-/// @note Containment uses lexically_relative and inspects the first component.
-///       Comparing string prefixes would accept /workspace for a workdir of
-///       /work — the strings match, the directories are unrelated.
-///
-/// @code
-/// // workdir = /work
-/// resolve_path("src/a.py");              // {/work/src/a.py, Allow}
-/// resolve_path("./src/../src/a.py");     // {/work/src/a.py, Allow}
-/// resolve_path("../../../etc/passwd");   // {/etc/passwd,    Deny}
-/// resolve_path("");                      // {{},             Deny}
-/// @endcode
 std::pair<fs::path, Decision> Sandbox::resolve_path(std::string_view raw) const {
     if (raw.empty()) return {{}, {Action::Deny, "路径为空"}};
 
@@ -211,26 +118,6 @@ std::pair<fs::path, Decision> Sandbox::resolve_path(std::string_view raw) const 
     return {p, {Action::Allow, {}}};
 }
 
-/// @brief Split a command line into its individual commands.
-///
-/// @param cmd The whole line.
-/// @return One trimmed entry per segment.
-///
-/// @warning Skip this and every other check in the layer is decoration: a rule
-///          of `allow Bash(ls*)` matched against the whole string lets
-///          `ls && rm -rf /` through on its prefix.
-///
-/// @note Two-character operators are tested before single ones — reading `&&`
-///       as two `&` yields an empty segment between them.
-/// @note Quotes suppress separators: `git commit -m 'a; b'` is one command, and
-///       splitting it would hand the matcher half of one.
-///
-/// @code
-/// split_command("ls && rm -rf / ; echo done | grep x");
-/// //   {"ls", "rm -rf /", "echo done", "grep x"}
-/// split_command("git add . && git commit -m 'a; b' && git push");
-/// //   {"git add .", "git commit -m 'a; b'", "git push"}
-/// @endcode
 std::vector<std::string> Sandbox::split_command(std::string_view cmd) {
     // ⚠️ 不拆的话，`ls && rm -rf /` 整条去匹配 allow 规则 Bash(ls*) —— 前缀命中，
     //    整条放行。这一条不做，前面所有权限设计都是装饰。
@@ -265,23 +152,6 @@ std::vector<std::string> Sandbox::split_command(std::string_view cmd) {
     return segs;
 }
 
-/// @brief Vet a bash command line segment by segment.
-///
-/// @param cmd The command line.
-/// @return The strictest verdict any segment produced.
-///
-/// @note Danger patterns are tested per segment and before the rules, so no
-///       configuration can wave them through.
-/// @note bash counts as having side effects for every segment. This one may be
-///       a bare `ls`, but the next one need not be.
-///
-/// @code
-/// // with allow Bash(git status:*), mode = Ask
-/// check_command("git status --short");    // Allow — matches the rule
-/// check_command("npm publish");           // Ask   — nothing matches
-/// check_command("sudo rm -rf /");         // Deny  — danger pattern
-/// check_command("git status && rm -rf /");// Deny  — second segment
-/// @endcode
 Decision Sandbox::check_command(std::string_view cmd) const {
     const auto segments = split_command(cmd);
     if (segments.empty()) return {Action::Allow, "空命令"};
@@ -299,26 +169,6 @@ Decision Sandbox::check_command(std::string_view cmd) const {
     return {Action::Allow, "所有命令段都通过"};
 }
 
-/// @brief Match one call against the rules, falling back to the mode.
-///
-/// @param rule_name The tool name that rules are written against.
-/// @param read_only Whether the tool leaves local files alone.
-/// @param subject   What is being acted on.
-/// @return Allow, Deny or Ask.
-///
-/// @note deny wins over allow. The other order makes a broad allow rule
-///       silently disable every deny rule beside it, which is not what someone
-///       writing `deny Bash(rm *)` next to `allow Bash` intends.
-/// @note With nothing matching, the mode decides. read_only only chooses among
-///       those fallbacks — it is not an exemption.
-///
-/// @code
-/// //                          bash (side effects)   read-only tool
-/// //   Yolo                   Allow                 Allow
-/// //   Auto                   Ask                   Allow
-/// //   ReadOnly               Deny                  Allow
-/// //   Ask                    Ask                   Ask
-/// @endcode
 Decision Sandbox::check(std::string_view rule_name, bool read_only,
                         std::string_view subject) const {
     // ⚠️ read_only 只影响「没有规则命中时模式怎么兜底」，不是免授权开关。
@@ -348,19 +198,6 @@ Decision Sandbox::check(std::string_view rule_name, bool read_only,
     return {Action::Ask, "未知模式"};   // 不可达；没有它编译器警告 control reaches end
 }
 
-/// @brief Resolve an Ask by asking a human, or by refusing when there is none.
-///
-/// @param rule_name Tool name, shown in the prompt.
-/// @param subject   What it wants to act on, shown in the prompt.
-/// @param d         The verdict so far; passed through unless it is Ask.
-/// @return A resolved verdict.
-///
-/// @note No asker means CI or a sub-agent, and Ask becomes Deny. Getting a run
-///       through unattended should mean writing `--mode yolo` or an allow rule
-///       — an explicit decision — rather than relying on "nobody was around to
-///       ask" to bypass the layer.
-/// @note Always is recorded through remember_allow, so the same subject is not
-///       asked about twice in one session.
 Decision Sandbox::confirm(std::string_view rule_name, std::string_view subject, Decision d) {
     if (d.action != Action::Ask) return d;
 
@@ -381,20 +218,9 @@ Decision Sandbox::confirm(std::string_view rule_name, std::string_view subject, 
     return {Action::Deny, "未知的确认结果"};
 }
 
-/// @brief Record a session-scoped allow after the user answered Always.
-///
-/// @param rule_name The tool.
-/// @param subject   The exact subject approved.
-///
-/// @note Exact match, no generalisation. `npm test` recorded as `npm*` would
-///       turn approving one command into approving npm publish — quietly
-///       widening "allow this operation" into "allow this family". Asking again
-///       when an argument changes is the cheaper mistake, and an operator who
-///       wants the broader grant can write an allow rule, which is visible in
-///       the config file.
-/// @note Duplicates are skipped so the list does not grow on repeated answers.
 void Sandbox::remember_allow(std::string_view rule_name, std::string_view subject) {
-    // 设计题（sandbox.hpp:97）：批准了 `npm test`，下次 `npm test -- --watch` 算不算？
+    // 设计题（见 sandbox.hpp 里 remember_allow 的 @note）：
+    // 批准了 `npm test`，下次 `npm test -- --watch` 算不算？
     //
     // 这里选**精确匹配**：只记住这一个 subject，不做前缀推广。
     //   太宽（记成 `npm*`）→ 用户批准一次 npm test，等于放开了 npm publish
