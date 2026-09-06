@@ -79,11 +79,11 @@ something usable.
 
 ```
 Stage 0  ████████████████████  done
-Stage 1  ██████████████████░░  loop runs end to end; AnthropicClient still open
+Stage 1  ████████████████████  loop and the real client; streaming still open
 Stage 2  ████████████████░░░░  executor, tool registry, read and edit
 Stage 4  ████░░░░░░░░░░░░░░░░  safe_split; compaction itself still open
 Stage 6  ██████░░░░░░░░░░░░░░  task scheduler
-Stage 7  ████████░░░░░░░░░░░░  App wiring, enough to run
+Stage 7  ████████████░░░░░░░░  App wiring and a working CLI
 Stage 3  ████████████████████  done — the gate is wired into the executor
 Stage 4+ ░░░░░░░░░░░░░░░░░░░░
 ```
@@ -98,6 +98,22 @@ Stage 4+ ░░░░░░░░░░░░░░░░░░░░
 | `test_smoke` | **15/15** |
 
 Builds clean under `-Wall -Wextra -Wpedantic`.
+
+## Running it for real
+
+```bash
+sudo apt install libcurl4-openssl-dev     # only needed for the real client
+cmake -S . -B build -G Ninja && cmake --build build
+
+export ANTHROPIC_API_KEY=sk-ant-...
+./build/mini-agent                        # interactive
+./build/mini-agent "read src/session.cpp and check safe_split"   # one-shot
+./build/mini-agent --help
+```
+
+Without a task argument it enters a REPL; `/help` lists the slash commands.
+`--mode yolo` skips the permission prompts. Streaming is not wired up yet, so
+answers arrive in one piece.
 
 ## Dependencies
 

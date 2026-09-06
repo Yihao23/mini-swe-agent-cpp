@@ -66,11 +66,11 @@ mini-swe-agent-cpp/
 
 ```
 Stage 0  ████████████████████  完成
-Stage 1  ██████████████████░░  循环端到端跑通；AnthropicClient 待写
+Stage 1  ████████████████████  循环 + 真实客户端；流式待写
 Stage 2  ████████████████░░░░  executor、工具注册表、read 和 edit
 Stage 4  ████░░░░░░░░░░░░░░░░  safe_split；压缩本身待写
 Stage 6  ██████░░░░░░░░░░░░░░  任务调度器
-Stage 7  ████████░░░░░░░░░░░░  App 装配，够跑起来了
+Stage 7  ████████████░░░░░░░░  App 装配 + 能用的 CLI
 Stage 3  ████████████████████  完成 —— 闸门已接进 executor
 Stage 4+ ░░░░░░░░░░░░░░░░░░░░
 ```
@@ -85,6 +85,21 @@ Stage 4+ ░░░░░░░░░░░░░░░░░░░░
 | `test_smoke` | **15/15** |
 
 `-Wall -Wextra -Wpedantic` 下零警告。
+
+## 真跑起来
+
+```bash
+sudo apt install libcurl4-openssl-dev     # 只有真实客户端需要
+cmake -S . -B build -G Ninja && cmake --build build
+
+export ANTHROPIC_API_KEY=sk-ant-...
+./build/mini-agent                        # 交互模式
+./build/mini-agent "读一下 src/session.cpp，看看 safe_split 有没有问题"   # 一次性任务
+./build/mini-agent --help
+```
+
+不给任务参数就进 REPL，`/help` 列出斜杠命令。`--mode yolo` 跳过权限确认。
+流式还没接，回答是一次性出来的。
 
 ## 依赖只有两个
 

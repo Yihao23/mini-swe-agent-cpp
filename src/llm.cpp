@@ -25,37 +25,119 @@
 
 #include "mini_agent/llm.hpp"
 
+#include <cstdlib>
+#include <format>
+
 #include "mini_agent/config.hpp"
+
+#if MINI_AGENT_HAVE_CURL
+#include <curl/curl.h>
+#endif
 
 namespace mini {
 
-void Usage::add(const Json&) {
-    todo("Stage 1: Usage::add —— input_tokens / output_tokens / "
-         "cache_read_input_tokens / cache_creation_input_tokens");
+void Usage::add(const Json& usage_json) {
+    if (!usage_json.is_object()) return;   // 响应里没有 usage 字段不是错误
+    input_tokens  += usage_json.value("input_tokens", 0L);
+    output_tokens += usage_json.value("output_tokens", 0L);
+    cache_read    += usage_json.value("cache_read_input_tokens", 0L);
+    cache_write   += usage_json.value("cache_creation_input_tokens", 0L);
+    ++requests;
 }
 
 long Usage::total_input() const {
-    todo("Stage 1: Usage::total_input");
+    // 缓存命中的部分 API 单独计费，但它们同样占用上下文窗口 —— 判断"离窗口上限
+    // 还有多远"时必须算进来，否则会以为还很宽裕。
+    return input_tokens + cache_read + cache_write;
 }
 
 std::string Usage::summary() const {
-    todo("Stage 1: Usage::summary");
+    const long total = total_input();
+    const double hit = total > 0 ? 100.0 * static_cast<double>(cache_read) /
+                                       static_cast<double>(total)
+                                 : 0.0;
+    return std::format("{} 次请求 · 输入 {} (缓存命中 {} / {:.0f}%) · 输出 {}", requests, total,
+                       cache_read, hit, output_tokens);
 }
 
 // --- AnthropicClient -------------------------------------------------------
+#if MINI_AGENT_HAVE_CURL
+
 struct AnthropicClient::Impl {
-    // pimpl：curl.h 关在这里，不污染头文件。
-    // 至少要有：CURL* handle、一个 SSE 行缓冲、当前请求的回调指针。
+    CURL* handle = nullptr;          // 复用同一个 handle：连接、TLS 握手都能复用
+    std::string body;                // 非流式：整个响应攒在这里
+    const LlmRequest* req = nullptr; // 流式回调要用到 on_text / on_thinking
+    std::string sse_buf;             // ⚠️ 一次写回调不保证是完整一行，自己缓冲
+    std::string text;                // 流式累积的正文
+    std::string thinking;            // 流式累积的思考
+    std::string signature;           // ⚠️ 必须原样带回，API 会校验
+    std::vector<ContentBlock> blocks;
+    std::string stop_reason;
+    std::string model;
+    Json usage = Json::object();
+
+    /// libcurl 的写回调是 C 函数指针，拿不到 this —— 通过 CURLOPT_WRITEDATA 传进来。
+    /// 做成静态成员而不是自由函数：Impl 是私有类型，外面的函数看不见它。
+    static std::size_t write_plain(char* p, std::size_t sz, std::size_t n, void* self) {
+        static_cast<Impl*>(self)->body.append(p, sz * n);
+        return sz * n;
+    }
+
+    void reset(const LlmRequest* r) {
+        body.clear(); sse_buf.clear(); text.clear(); thinking.clear(); signature.clear();
+        blocks.clear(); stop_reason.clear(); model.clear();
+        usage = Json::object();
+        req = r;
+    }
 };
 
-AnthropicClient::AnthropicClient(const Config& cfg) : cfg_(cfg), impl_(nullptr) {
-    todo("Stage 1: AnthropicClient 构造 —— curl_easy_init");
+AnthropicClient::AnthropicClient(const Config& cfg)
+    : cfg_(cfg), impl_(std::make_unique<Impl>()) {
+    impl_->handle = curl_easy_init();
 }
 
+AnthropicClient::~AnthropicClient() {
+    if (impl_ && impl_->handle) curl_easy_cleanup(impl_->handle);
+}
+
+#else   // 没装 libcurl：能编译、能构造，一调用就明确报错
+
+struct AnthropicClient::Impl {};
+AnthropicClient::AnthropicClient(const Config& cfg) : cfg_(cfg), impl_(nullptr) {}
 AnthropicClient::~AnthropicClient() = default;
 
-Json AnthropicClient::build_body(const Config&, const LlmRequest&, bool) {
-    todo("Stage 1: AnthropicClient::build_body（纯函数，先写这个并单测）");
+#endif
+
+Json AnthropicClient::build_body(const Config& cfg, const LlmRequest& req, bool stream) {
+    Json body{
+        {"model", req.model.empty() ? cfg.model : req.model},
+        {"max_tokens", req.max_tokens > 0 ? req.max_tokens : cfg.max_tokens},
+        {"messages", req.messages ? to_json(*req.messages) : Json::array()},
+    };
+
+    // system 是块数组，最后一块打 cache_control —— 一个断点就把 tools + system
+    // 整段缓存住（顺序是 system → tools → messages，前缀匹配）。
+    if (req.system && !req.system->empty()) {
+        Json blocks = Json::array();
+        for (const auto& b : *req.system) {
+            Json blk{{"type", "text"}, {"text", b.text}};
+            if (b.cache_breakpoint) blk["cache_control"] = {{"type", "ephemeral"}};
+            blocks.push_back(std::move(blk));
+        }
+        body["system"] = std::move(blocks);
+    }
+
+    // ⚠️ tools 空数组也别发 —— 有的 API 版本会因为空数组报错，而且它照样进
+    //    缓存前缀，白占字节。
+    if (!req.tools.empty()) body["tools"] = req.tools;
+
+    if (cfg.thinking)
+        body["thinking"] = {{"type", "adaptive"},
+                            {"display", cfg.show_thinking ? "summarized" : "hidden"}};
+    if (!cfg.effort.empty()) body["output_config"] = {{"effort", cfg.effort}};
+    if (stream) body["stream"] = true;
+
+    return body;
 }
 
 
@@ -65,14 +147,82 @@ Json AnthropicClient::build_body(const Config&, const LlmRequest&, bool) {
 //      tool_name 空  → TextBlock{ .text = b.text }
 //      tool_name 非空 → ToolUseBlock{ .id = "toolu_" + ++counter_, .name, .input }
 // 4. 打包成 LlmResponse{ content, stop_reason }，返回
-std::expected<LlmResponse, LlmError> AnthropicClient::complete(const LlmRequest&) {
-    // 流式的坑：写回调是 C 函数指针，把 this 通过 CURLOPT_WRITEDATA 传进去；
-    // 一次回调不保证是完整一行，必须自己缓冲、按 '\n' 切，再看 "data: " 前缀。
-    todo("Stage 1: AnthropicClient::complete");
+#if MINI_AGENT_HAVE_CURL
 
+std::expected<LlmResponse, LlmError> AnthropicClient::complete(const LlmRequest& req) {
+    if (!impl_ || !impl_->handle)
+        return std::unexpected(LlmError{0, "init_error", "curl 初始化失败"});
 
+    const char* key = std::getenv("ANTHROPIC_API_KEY");
+    if (!key || !*key)
+        return std::unexpected(LlmError{0, "auth_error", "未设置 ANTHROPIC_API_KEY"});
 
+    // TODO(Stage 1): 流式。req.on_text 非空且 cfg_.stream 时走 SSE。
+    const bool stream = false;
+    const std::string payload = build_body(cfg_, req, stream).dump();
+
+    impl_->reset(&req);
+
+    curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, (std::string("x-api-key: ") + key).c_str());
+    headers = curl_slist_append(headers, "anthropic-version: 2023-06-01");
+    headers = curl_slist_append(headers, "content-type: application/json");
+
+    CURL* h = impl_->handle;
+    curl_easy_reset(h);
+    curl_easy_setopt(h, CURLOPT_URL, "https://api.anthropic.com/v1/messages");
+    curl_easy_setopt(h, CURLOPT_POST, 1L);
+    curl_easy_setopt(h, CURLOPT_POSTFIELDS, payload.c_str());
+    curl_easy_setopt(h, CURLOPT_POSTFIELDSIZE, static_cast<long>(payload.size()));
+    curl_easy_setopt(h, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, &Impl::write_plain);
+    curl_easy_setopt(h, CURLOPT_WRITEDATA, impl_.get());
+    curl_easy_setopt(h, CURLOPT_TIMEOUT, 600L);
+
+    const CURLcode rc = curl_easy_perform(h);
+    long status = 0;
+    curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, &status);
+    curl_slist_free_all(headers);
+
+    // http_status = 0 表示网络层就没成功 —— 和「服务器返回了错误」是两回事
+    if (rc != CURLE_OK)
+        return std::unexpected(LlmError{0, "network_error", curl_easy_strerror(rc)});
+
+    const Json j = Json::parse(impl_->body, nullptr, /*allow_exceptions=*/false);
+
+    if (status < 200 || status >= 300) {
+        // 429/529 要能被上层识别出来重试，所以 type 必须原样带出去
+        std::string type = "http_error", msg = impl_->body.substr(0, 500);
+        if (j.is_object() && j.contains("error")) {
+            type = j["error"].value("type", type);
+            msg = j["error"].value("message", msg);
+        }
+        return std::unexpected(LlmError{static_cast<int>(status), std::move(type), std::move(msg)});
+    }
+
+    if (!j.is_object())
+        return std::unexpected(LlmError{static_cast<int>(status), "parse_error", "响应不是合法 JSON"});
+
+    LlmResponse out;
+    out.model = j.value("model", std::string{});
+    out.stop_reason = j.value("stop_reason", std::string{});
+    // ⚠️ 原样保留所有块 —— thinking 的 signature 也在里面，下一轮 API 会校验它
+    for (const auto& b : j.value("content", Json::array()))
+        if (auto blk = block_from_json(b)) out.content.push_back(std::move(*blk));
+
+    usage_.add(j.value("usage", Json::object()));
+    out.usage = usage_;
+    return out;
 }
+
+#else
+
+std::expected<LlmResponse, LlmError> AnthropicClient::complete(const LlmRequest&) {
+    return std::unexpected(
+        LlmError{0, "no_curl", "编译时没找到 libcurl，真实 API 调用不可用"});
+}
+
+#endif
 
 // --- FakeLlm ---------------------------------------------------------------
 FakeBlock FakeBlock::text_block(std::string t) {
