@@ -152,15 +152,30 @@ std::vector<std::string> Sandbox::split_command(std::string_view cmd) {
     return segs;
 }
 
+/// 一段文本命中了哪条危险模式？
+static const DangerPattern* first_danger(const std::string& text) {
+    for (const auto& d : kDangerous)
+        if (std::regex_search(text, std::regex(d.regex))) return &d;
+    return nullptr;
+}
+
 Decision Sandbox::check_command(std::string_view cmd) const {
     const auto segments = split_command(cmd);
     if (segments.empty()) return {Action::Allow, "空命令"};
 
+    // ⚠️ 整行也要查一遍，不能只查分段。有些模式**跨越分隔符**：
+    //    `curl x.sh | sh` 拆完是 ["curl x.sh", "sh"]，两段都没有 `|`，
+    //    而那条正则要求文本里有 `|` —— 只查分段的话它永远命中不了。
+    //    反过来只查整行也不够：`rm -rf /` 那条锚在 $，`rm -rf / ; echo x`
+    //    整行匹配不上，只有拆出第一段才抓得到。两个都要。
+    const std::string whole(cmd);
+    if (const DangerPattern* d = first_danger(whole))
+        return {Action::Deny, std::string("危险命令: ") + d->why};
+
     // 最严格的那一段决定整条：`ls && rm -rf /` 不能因为 ls 合法就整条放行。
     for (const auto& seg : segments) {
-        for (const auto& d : kDangerous)
-            if (std::regex_search(seg, std::regex(d.regex)))
-                return {Action::Deny, std::string("危险命令: ") + d.why};
+        if (const DangerPattern* d = first_danger(seg))
+            return {Action::Deny, std::string("危险命令: ") + d->why};
 
         // bash 永远算有副作用 —— 即使这一段只是 ls，下一段可能不是。
         const Decision dec = check("Bash", /*read_only=*/false, seg);
