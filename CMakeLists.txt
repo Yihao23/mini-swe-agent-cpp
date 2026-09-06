@@ -60,6 +60,28 @@ add_executable(mini-agent src/main.cpp)
 target_link_libraries(mini-agent PRIVATE mini_agent_core)
 
 # ---------------------------------------------------------------------------
+# 文档测试：从头文件的 @code{.test} 块生成 tests/test_docs.cpp
+#
+# 生成物是**签入仓库**的，所以没装 Python 也能正常构建。装了的话，任何一个
+# 头文件改动都会重新生成 —— 文档里的示例失效时，编译期或 ctest 会当场报出来，
+# 而不是悄悄变成谎话。
+# ---------------------------------------------------------------------------
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+  file(GLOB_RECURSE DOC_TEST_INPUTS CONFIGURE_DEPENDS
+       ${CMAKE_SOURCE_DIR}/include/*.hpp ${CMAKE_SOURCE_DIR}/src/*.cpp)
+  add_custom_command(
+    OUTPUT  ${CMAKE_SOURCE_DIR}/tests/test_docs.cpp
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/gen_doc_tests.py
+    DEPENDS ${CMAKE_SOURCE_DIR}/tools/gen_doc_tests.py ${DOC_TEST_INPUTS}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "从 @code{.test} 块生成 tests/test_docs.cpp"
+    VERBATIM)
+else()
+  message(STATUS "未找到 Python3 —— 使用签入的 tests/test_docs.cpp，不重新生成")
+endif()
+
+# ---------------------------------------------------------------------------
 # 测试：tests/ 下每个 test_*.cpp 编成一个可执行文件，注册进 ctest
 # ---------------------------------------------------------------------------
 enable_testing()
