@@ -31,17 +31,83 @@ namespace mini {
 
 namespace fs = std::filesystem;
 
+/// @brief What one command run produced.
+///
+/// @note Four ways a run can go wrong and they are kept apart on purpose:
+///       a non-zero `exit_code` (the command ran and failed), `timed_out`
+///       (it never finished), `spawn_failed` (pipe or fork failed, so nothing
+///       ran at all), and exit_code 126/127 (the child got as far as chdir or
+///       exec and no further). The model picks a different next move for each.
 struct ProcessResult {
+    /// @brief The command's exit status; -1 when it was killed for timing out.
+    /// @note A signal death is reported as 128 + signum, the shell convention,
+    ///       so `kill -9` shows up as 137 rather than as an ordinary failure.
     int exit_code = -1;
-    std::string output;     // stdout + stderr 合并（模型要靠它排错，别分开）
-    bool timed_out = false;
-    bool spawn_failed = false;
-    std::chrono::milliseconds duration{0};
+
+    /// @brief stdout and stderr, interleaved as they were produced.
+    /// @note Merged, not two fields. A compiler error is on stderr and the line
+    ///       it refers to is on stdout; split apart, the ordering that makes
+    ///       them readable is lost.
+    /// @note Truncated at max_output_bytes, with a note appended saying so.
+    std::string output;
+
+    bool timed_out = false;      ///< Killed at the deadline rather than exiting.
+    bool spawn_failed = false;   ///< pipe() or fork() failed; the command never ran.
+    std::chrono::milliseconds duration{0};   ///< Wall clock, start to reap.
 };
 
-/// 跑一条 shell 命令，最多等 timeout。
-/// **不抛异常** —— 任何失败都反映在返回值里（这是 agent 的错误哲学：失败是值）。
-/// TODO(Stage 2)
+/// @brief Run one shell command and collect its output, with a deadline.
+///
+/// @param command          Passed to `/bin/sh -c`, so pipes, globs and `&&`
+///                         all work — and so does everything else a shell can
+///                         do. The caller is responsible for having vetted it.
+/// @param cwd              Working directory for the command.
+/// @param timeout          How long to wait before killing the process group.
+/// @param max_output_bytes Keep at most this much output; the rest is read and
+///                         discarded so the child never blocks writing.
+/// @return What happened. See ProcessResult for how the failure modes differ.
+///
+/// @warning **Never throws.** Every failure is a value — a tool that cannot run
+///          one command must hand the model something it can work around, not
+///          end the run. This is the same rule as ToolResult::is_error.
+/// @warning The command is not sanitised here. Permission checks belong to
+///          Sandbox::check_command, which the executor calls first.
+///
+/// @note The whole process **group** is killed on a timeout, not just the
+///       child. `sleep 30 & echo done` exits the shell at once while the
+///       grandchild keeps running — and keeps the pipe open, so the parent
+///       would never see EOF. SIGTERM, 200ms of grace, then SIGKILL.
+/// @note Output past max_output_bytes is still read, just dropped. Stopping the
+///       reads leaves the child blocked in write() while the parent waits for
+///       EOF: the truncation logic would deadlock the thing it protects.
+/// @note The beginning of the output is what survives truncation. What a
+///       command is doing is stated at the top; the tail is usually repetition.
+///
+/// @code{.test}
+/// @setup const auto wd = doc_workdir();
+/// run_shell("echo hello", wd, 5s).output        ==> "hello\n"
+/// run_shell("echo hello", wd, 5s).exit_code     ==> 0
+/// run_shell("exit 42", wd, 5s).exit_code        ==> 42
+/// run_shell("no_such_cmd_xyz", wd, 5s).exit_code ==> 127
+/// run_shell("kill -TERM $$", wd, 5s).exit_code  ==> 128 + SIGTERM
+/// run_shell("echo out; echo err >&2", wd, 5s).output ==> "out\nerr\n"
+/// run_shell("pwd", wd, 5s).output               ==> wd.string() + "\n"
+/// @endcode
+///
+/// A command that outruns its deadline, and one that outruns its output budget:
+///
+/// @code{.test}
+/// @setup const auto wd = doc_workdir();
+/// @setup const auto slow = run_shell("echo before; sleep 30", wd, 1s);
+/// slow.timed_out                                ==> true
+/// (slow.output.find("before") != std::string::npos)  ==> true
+/// (slow.duration < 3000ms)                      ==> true
+/// @setup const auto big = run_shell("echo HEAD; yes filler | head -100000", wd, 5s, 512);
+/// big.timed_out                                 ==> false
+/// big.exit_code                                 ==> 0
+/// (big.output.rfind("HEAD", 0) == 0)            ==> true
+/// (big.output.size() < 4096)                    ==> true
+/// @endcode
 ProcessResult run_shell(const std::string& command,
                         const fs::path& cwd,
                         std::chrono::seconds timeout,

@@ -5,6 +5,9 @@
 // A documented example should read as documentation, not as test scaffolding.
 // Anything a block needs beyond one or two @setup lines belongs here instead.
 //
+#include <signal.h>
+
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -12,12 +15,15 @@
 #include "mini_agent/config.hpp"
 #include "mini_agent/message.hpp"
 #include "mini_agent/parser.hpp"
+#include "mini_agent/process.hpp"
 #include "mini_agent/sandbox.hpp"
 #include "mini_agent/scheduler.hpp"
 #include "mini_agent/session.hpp"
 #include "mini_agent/tool.hpp"
 
 namespace mini {
+
+using namespace std::chrono_literals;   // 示例里能写 5s，而不是 std::chrono::seconds{5}
 
 /// @brief A minimal Tool, so examples can exercise the base-class behaviour.
 struct DocTool : Tool {
@@ -42,5 +48,8 @@ inline Config doc_config(PermissionMode mode = PermissionMode::Ask) {
     cfg.normalize();
     return cfg;
 }
+
+/// @brief A scratch directory examples can run commands in.
+inline std::filesystem::path doc_workdir() { return doc_config().workdir; }
 
 }  // namespace mini

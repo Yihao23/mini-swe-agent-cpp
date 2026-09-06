@@ -8,6 +8,32 @@
 
 using namespace mini;
 
+/// From include/mini_agent/process.hpp:86
+TEST(doc_include_mini_agent_process_hpp_L86) {
+    const auto wd = doc_workdir();
+    CHECK_MSG((run_shell("echo hello", wd, 5s).output) == ("hello\n"), "include/mini_agent/process.hpp:88 的示例失效了");
+    CHECK_MSG((run_shell("echo hello", wd, 5s).exit_code) == (0), "include/mini_agent/process.hpp:89 的示例失效了");
+    CHECK_MSG((run_shell("exit 42", wd, 5s).exit_code) == (42), "include/mini_agent/process.hpp:90 的示例失效了");
+    CHECK_MSG((run_shell("no_such_cmd_xyz", wd, 5s).exit_code) == (127), "include/mini_agent/process.hpp:91 的示例失效了");
+    CHECK_MSG((run_shell("kill -TERM $$", wd, 5s).exit_code) == (128 + SIGTERM), "include/mini_agent/process.hpp:92 的示例失效了");
+    CHECK_MSG((run_shell("echo out; echo err >&2", wd, 5s).output) == ("out\nerr\n"), "include/mini_agent/process.hpp:93 的示例失效了");
+    CHECK_MSG((run_shell("pwd", wd, 5s).output) == (wd.string() + "\n"), "include/mini_agent/process.hpp:94 的示例失效了");
+}
+
+/// From include/mini_agent/process.hpp:99
+TEST(doc_include_mini_agent_process_hpp_L99) {
+    const auto wd = doc_workdir();
+    const auto slow = run_shell("echo before; sleep 30", wd, 1s);
+    CHECK_MSG((slow.timed_out) == (true), "include/mini_agent/process.hpp:102 的示例失效了");
+    CHECK_MSG(((slow.output.find("before") != std::string::npos)) == (true), "include/mini_agent/process.hpp:103 的示例失效了");
+    CHECK_MSG(((slow.duration < 3000ms)) == (true), "include/mini_agent/process.hpp:104 的示例失效了");
+    const auto big = run_shell("echo HEAD; yes filler | head -100000", wd, 5s, 512);
+    CHECK_MSG((big.timed_out) == (false), "include/mini_agent/process.hpp:106 的示例失效了");
+    CHECK_MSG((big.exit_code) == (0), "include/mini_agent/process.hpp:107 的示例失效了");
+    CHECK_MSG(((big.output.rfind("HEAD", 0) == 0)) == (true), "include/mini_agent/process.hpp:108 的示例失效了");
+    CHECK_MSG(((big.output.size() < 4096)) == (true), "include/mini_agent/process.hpp:109 的示例失效了");
+}
+
 /// From include/mini_agent/sandbox.hpp:77
 TEST(doc_include_mini_agent_sandbox_hpp_L77) {
     CHECK_MSG((Rule::parse("Bash")->tool) == ("Bash"), "include/mini_agent/sandbox.hpp:78 的示例失效了");
