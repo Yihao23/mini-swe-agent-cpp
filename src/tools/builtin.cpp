@@ -17,6 +17,7 @@
 #include <system_error>
 
 #include "mini_agent/config.hpp"
+#include "mini_agent/process.hpp"
 #include "mini_agent/sandbox.hpp"
 #include "mini_agent/session.hpp"
 
@@ -203,6 +204,92 @@ class EditTool final : public Tool {
     }
 };
 
+/// @brief Runs one shell command through run_shell.
+///
+/// @note Makes no permission decision of its own. By the time run() is called
+///       the executor has already put the command through Sandbox::authorize,
+///       which splits it on `&& || ; |` and checks every segment against
+///       kDangerous and the rules. A tool that re-checked would be a second
+///       place to keep the policy correct.
+/// @note read_only() is false, so the executor will not run it concurrently
+///       with anything: a command can write files, and two of them racing on
+///       the same tree is not something the model can reason about.
+class BashTool final : public Tool {
+  public:
+    std::string_view name() const override { return "bash"; }
+
+    std::string_view description() const override {
+        // ⚠️ 唯一告诉模型「何时该用」的地方。这里点名 read/edit/glob 是有意的 ——
+        //    不写的话模型会用 `cat`、`sed -i`、`find`，绕开所有做了边界检查的工具。
+        return "在工作目录里执行一条 shell 命令，返回合并后的 stdout+stderr 和退出码。"
+               "用来跑测试、构建、git 等。"
+               "读文件用 read、改文件用 edit、找文件用 glob —— 不要用 cat/sed/find 代替。";
+    }
+
+    Json input_schema() const override {
+        return Json{
+            {"type", "object"},
+            {"properties",
+             {{"command", {{"type", "string"}, {"description", "要执行的 shell 命令"}}},
+              {"timeout_sec",
+               {{"type", "integer"}, {"description", "最多等多少秒，不填用配置里的默认值"}}}}},
+            {"required", Json::array({"command"})},
+        };
+    }
+
+    bool read_only() const override { return false; }            // 可能写文件 → 不并发
+    bool requires_permission() const override { return true; }   // 必须过闸
+
+    /// ⚠️ 默认实现取「按 key 字母序的第一个字符串参数」，这里只有 command 一个字符串，
+    ///    结果碰巧是对的。仍然显式写出来：沙箱拿这个字符串去拆段、匹配 kDangerous，
+    ///    哪天多加一个字符串参数（比如 description），默认实现会静默交出错误的东西。
+    std::string subject(const Json& args) const override {
+        return args.value("command", std::string{});
+    }
+
+    ToolResult run(const Json& args, ToolContext& ctx) override {
+        // ⚠️ 不能用 args.value("command", "")：key 存在但类型不对时它**抛异常**，
+        //    不是返回默认值。schema 只是给模型的提示，不是保证 —— 模型完全可能
+        //    发 {"command": 42}。executor 虽然会兜住异常，但报错文字会变成一句
+        //    没头没尾的 what()，模型看不懂该怎么改。
+        if (!args.is_object() || !args.contains("command") || !args["command"].is_string())
+            return ToolResult::error("缺少 command 参数（必须是字符串）");
+        const auto cmd = args["command"].get<std::string>();
+        if (cmd.empty()) return ToolResult::error("command 不能为空");
+
+        const int cfg_timeout = ctx.cfg->tool_timeout_sec;
+        const int want = args.contains("timeout_sec") && args["timeout_sec"].is_number_integer()
+                             ? args["timeout_sec"].get<int>()
+                             : cfg_timeout;
+        // 模型给的超时只能往下调，不能超过配置上限 —— 否则它可以自己解除限制。
+        const auto timeout = std::chrono::seconds{std::clamp(want, 1, cfg_timeout)};
+
+        const auto r = run_shell(cmd, ctx.cfg->workdir, timeout, ctx.cfg->max_output_chars);
+
+        // ProcessResult 有四种失败方式，这里塌成 ToolResult 的一个 bool + 一段文字。
+        // 塌之前要把区别写进文字里，否则模型分不清「命令失败了」和「命令没跑起来」。
+        if (r.spawn_failed)
+            return ToolResult::error("无法启动命令: " + r.output);
+
+        std::string body = r.output.empty() ? "(无输出)" : r.output;
+        Json meta{{"exit_code", r.exit_code}, {"duration_ms", r.duration.count()}};
+
+        if (r.timed_out)
+            return ToolResult{.content = body, .is_error = true, .metadata = std::move(meta)};
+
+        // 退出码非零是**失败**，但输出照给 —— 编译错误、测试失败都走这条路，
+        // 那段输出正是模型下一步要读的东西。
+        if (r.exit_code != 0)
+            body += std::format("\n[退出码 {}]", r.exit_code);
+
+        return ToolResult{
+            .content = std::move(body),
+            .is_error = r.exit_code != 0,
+            .metadata = std::move(meta),
+        };
+    }
+};
+
 }  // namespace
 
 ToolPtr make_read_tool() { return std::make_shared<ReadTool>(); }
@@ -210,7 +297,7 @@ ToolPtr make_write_tool() { todo("Stage 2: write"); }
 ToolPtr make_edit_tool() { return std::make_shared<EditTool>(); }
 ToolPtr make_glob_tool() { todo("Stage 2: glob —— 按修改时间倒序"); }
 ToolPtr make_grep_tool() { todo("Stage 2: grep —— std::regex 够用，注意跳过二进制/大文件"); }
-ToolPtr make_bash_tool() { todo("Stage 2: bash —— 调 run_shell，权限已由 executor 过闸"); }
+ToolPtr make_bash_tool() { return std::make_shared<BashTool>(); }
 ToolPtr make_todo_tool() { todo("Stage 4: todo —— 覆盖式提交，每轮由 reminder 回灌"); }
 ToolPtr make_skill_tool() { todo("Stage 5: skill —— 按名字加载完整手册"); }
 ToolPtr make_memory_tool() { todo("Stage 5: memory —— search/load/write/delete"); }
