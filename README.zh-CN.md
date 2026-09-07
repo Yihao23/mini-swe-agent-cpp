@@ -36,6 +36,9 @@ mini-swe-agent-cpp/
 ├── include/mini_agent/     契约。每个头文件顶部讲清楚"为什么这么设计" ——
 │                           那是文档的一部分，不是装饰
 ├── src/                    你的战场。未实现的函数体调用 todo("Stage N: ...")
+├── tools/
+│   ├── gen_doc_tests.py    把头文件的 @code{.test} 抽成真正的断言
+│   └── mutate.py           变异测试：验证测试真的抓得到 bug
 └── tests/
     ├── microtest.hpp       50 行的测试框架，你能一口气读完
     ├── test_smoke.cpp      15 个用例，就是规格说明书
@@ -44,8 +47,15 @@ mini-swe-agent-cpp/
     ├── test_tool.cpp       工具注册表与 schema 的不变量
     ├── test_parser.cpp     循环两端的 wire format 契约
     ├── test_session.cpp    持久化 round-trip
+    ├── test_process.cpp    子进程超时、进程组、输出截断
+    ├── test_bash.cpp       bash 工具：四种失败方式怎么塌成一个 is_error
+    ├── test_file_tools.cpp write 工具与三个文件工具的参数加固
+    ├── test_docs.cpp       生成物，勿手改
+    ├── doc_prelude.hpp     给文档示例用的脚手架
     └── mock_mcp_server.py  假 MCP server，Stage 7 验证握手用
 ```
+
+测试怎么组织、为什么还有第三层（变异测试），见 [docs/testing.zh-CN.md](docs/testing.zh-CN.md)。
 
 ## 阶段划分
 
@@ -82,9 +92,19 @@ Stage 4+ ░░░░░░░░░░░░░░░░░░░░
 | `test_tool` | 17/17 |
 | `test_parser` | 14/14 |
 | `test_session` | 12/12 |
+| `test_process` | 14/14 |
+| `test_bash` | 12/12 |
+| `test_file_tools` | 13/13 |
+| `test_docs` | 17 块 / 99 条（从头文件生成） |
 | `test_smoke` | **15/15** |
 
 `-Wall -Wextra -Wpedantic` 下零警告。
+
+```bash
+python3 tools/mutate.py     # 把 bug 种回去，看该红的用例会不会红
+```
+
+见 [docs/testing.zh-CN.md](docs/testing.zh-CN.md)。
 
 ## 真跑起来
 

@@ -48,6 +48,9 @@ mini-swe-agent-cpp/
 ├── include/mini_agent/     The contracts. Every header opens with *why* it is
 │                           shaped that way — that is documentation, not decoration
 ├── src/                    The work. Unimplemented bodies call todo("Stage N: ...")
+├── tools/
+│   ├── gen_doc_tests.py    Lifts @code{.test} blocks out of headers into assertions
+│   └── mutate.py           Mutation testing — do the tests catch what they name?
 └── tests/
     ├── microtest.hpp       A 50-line test framework you can read in one sitting
     ├── test_smoke.cpp      15 cases that serve as the specification
@@ -56,8 +59,16 @@ mini-swe-agent-cpp/
     ├── test_tool.cpp       Tool registry and schema invariants
     ├── test_parser.cpp     Wire-format contracts on both ends of the loop
     ├── test_session.cpp    Persistence round-trip
+    ├── test_process.cpp    Subprocess timeout, process groups, output truncation
+    ├── test_bash.cpp       How four kinds of failure collapse into one is_error
+    ├── test_file_tools.cpp The write tool, and typed argument reads
+    ├── test_docs.cpp       Generated — do not edit
+    ├── doc_prelude.hpp     Scaffolding the documented examples share
     └── mock_mcp_server.py  A fake MCP server for the Stage 7 handshake
 ```
+
+How the tests are organised, and why there is a third layer, is in
+[docs/testing.md](docs/testing.md).
 
 ## Stages
 
@@ -95,9 +106,19 @@ Stage 4+ ░░░░░░░░░░░░░░░░░░░░
 | `test_tool` | 17/17 |
 | `test_parser` | 14/14 |
 | `test_session` | 12/12 |
+| `test_process` | 14/14 |
+| `test_bash` | 12/12 |
+| `test_file_tools` | 13/13 |
+| `test_docs` | 17 blocks / 99 assertions, generated from the headers |
 | `test_smoke` | **15/15** |
 
 Builds clean under `-Wall -Wextra -Wpedantic`.
+
+```bash
+python3 tools/mutate.py     # put the bugs back; check the right cases go red
+```
+
+See [docs/testing.md](docs/testing.md).
 
 ## Running it for real
 
