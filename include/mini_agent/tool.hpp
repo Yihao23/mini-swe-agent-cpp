@@ -199,10 +199,14 @@ class Tool {
     /// @brief This tool as one entry of the API's `tools` array.
     /// @return `{"name":..., "description":..., "input_schema":...}`
     ///
-    /// @code
-    /// // {"name":"read",
-    /// //  "description":"读取文件内容，带行号。...",
-    /// //  "input_schema":{"type":"object","properties":{...},"required":["path"]}}
+    /// @code{.test}
+    /// @setup const DocTool t{"read"};
+    /// @setup const Json s = t.schema();
+    /// s.at("name")                  ==> "read"
+    /// s.contains("description")     ==> true
+    /// s.contains("input_schema")    ==> true
+    /// // 三个键，一个不多 —— 多余的字段 API 会拒绝
+    /// s.size()                      ==> 3u
     /// @endcode
     Json schema() const;
 };

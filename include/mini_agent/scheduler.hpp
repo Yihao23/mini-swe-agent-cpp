@@ -119,13 +119,21 @@ class Scheduler {
     ///       model nothing to act on across thirty tasks; "a → c → b → a" says
     ///       which edge to break.
     ///
-    /// @code
-    /// sched.add("a", "...", {"b"});
-    /// sched.add("b", "...", {"a"});
-    /// sched.validate();   // "依赖成环: a → b → a"
+    /// @code{.test}
+    /// @setup Scheduler ok(2);
+    /// @setup ok.add("a", "先做"); ok.add("b", "再做", {"a"});
+    /// ok.validate().has_value()                     ==> false
     ///
-    /// sched.add("x", "...", {"nope"});
-    /// sched.validate();   // "任务 \"x\" 依赖了不存在的任务 \"nope\""
+    /// @setup Scheduler cyc(2);
+    /// @setup cyc.add("a", "...", {"b"}); cyc.add("b", "...", {"a"});
+    /// cyc.validate().has_value()                    ==> true
+    /// // 报错要带上整条路径，否则三十个任务里没法查是哪条边
+    /// (cyc.validate()->find("a") != std::string::npos)   ==> true
+    /// (cyc.validate()->find("b") != std::string::npos)   ==> true
+    ///
+    /// @setup Scheduler miss(2);
+    /// @setup miss.add("x", "...", {"nope"});
+    /// (miss.validate()->find("nope") != std::string::npos)  ==> true
     /// @endcode
     ///
     /// 依赖存在 + 无环。DFS 三色标记；成环时错误信息里要带上路径，否则没法查。
@@ -158,15 +166,29 @@ class Scheduler {
     ///       introducing this class's only lock — not worth it while a task is
     ///       an LLM call measured in seconds.
     ///
-    /// @code
-    /// Scheduler s(3);
-    /// s.add("a", "analyse perf");
-    /// s.add("b", "analyse security");
-    /// s.add("c", "summarise", {"a", "b"});
-    /// s.run([](const Task& t, const std::map<std::string,std::string>& up) {
-    ///     return t.id + " done (" + std::to_string(up.size()) + " upstream)";
-    /// });
-    /// // a and b run concurrently, c waits for both and receives both results
+    /// @code{.test}
+    /// @setup Scheduler s(3);
+    /// @setup s.add("a", "analyse perf");
+    /// @setup s.add("b", "analyse security");
+    /// @setup s.add("c", "summarise", {"a", "b"});
+    /// @setup s.run([](const Task& t, const std::map<std::string, std::string>& up) {
+    /// @setup     return t.id + ":" + std::to_string(up.size());
+    /// @setup });
+    /// s.tasks().at("a").status   ==> TaskStatus::Done
+    /// s.tasks().at("c").status   ==> TaskStatus::Done
+    /// // a 和 b 没有上游，c 拿到两份上游结果
+    /// s.tasks().at("a").result   ==> "a:0"
+    /// s.tasks().at("c").result   ==> "c:2"
+    ///
+    /// // 上游失败 → 下游标 Blocked，而不是永远 Pending，也不拖垮整张图
+    /// @setup Scheduler f(2);
+    /// @setup f.add("bad", "会抛"); f.add("after", "依赖它", {"bad"});
+    /// @setup f.run([](const Task& t, auto&&) -> std::string {
+    /// @setup     if (t.id == "bad") throw std::runtime_error("boom");
+    /// @setup     return "ok";
+    /// @setup });
+    /// f.tasks().at("bad").status     ==> TaskStatus::Failed
+    /// f.tasks().at("after").status   ==> TaskStatus::Blocked
     /// @endcode
     ///
     /// C++ 实现提示：标准库没有 wait_any —— 轮询 future 的 wait_for(0ms)。

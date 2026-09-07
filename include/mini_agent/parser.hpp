@@ -83,17 +83,20 @@ using EventSink = std::function<void(const AgentEvent&)>;
 /// The same response is wanted three ways: flattened text for the screen, tool
 /// calls for the executor, and the untouched blocks for the history.
 ///
-/// @code
-/// LlmResponse r;
-/// r.content = {TextBlock{"Let me look"},
-///              ToolUseBlock{"toolu_1","read",{{"path","a.py"}}}};
-/// r.stop_reason = "tool_use";
-///
-/// auto p = parse(r);
-/// // p.text        == "Let me look"
-/// // p.tool_calls  == { ToolCallEvent{"toolu_1","read",{"path":"a.py"}} }
-/// // p.message     == Message{Assistant, both blocks, verbatim}
-/// // p.wants_tools() == true
+/// @code{.test}
+/// @setup LlmResponse r;
+/// @setup r.content = {TextBlock{"Let me look"},
+/// @setup              ToolUseBlock{"toolu_1", "read", {{"path", "a.py"}}}};
+/// @setup r.stop_reason = "tool_use";
+/// @setup const ParsedResponse p = parse(r);
+/// p.text                          ==> "Let me look"
+/// p.tool_calls.size()             ==> 1u
+/// p.tool_calls.at(0).name         ==> "read"
+/// p.tool_calls.at(0).input.at("path")  ==> "a.py"
+/// p.wants_tools()                 ==> true
+/// // ⚠️ message 要原样保留两个块，不是从 text 重建 —— 思考签名藏在里面
+/// p.message.content.size()        ==> 2u
+/// p.message.role                  ==> Role::Assistant
 /// @endcode
 struct ParsedResponse {
     std::string text;                       ///< Every TextBlock, concatenated.
@@ -147,11 +150,19 @@ ParsedResponse parse(const LlmResponse& response);
 ///       tell "ran fine, produced nothing" from "nothing happened".
 /// @note `is_error` is set from the event; to_json omits it when false.
 ///
-/// @code
-/// tool_result_message({{.id="toolu_1", .name="read",  .output="x = 1"},
-///                      {.id="toolu_2", .name="write", .output="", .is_error=false}});
-/// // Message{User, { ToolResultBlock{"toolu_1", "x = 1",       false},
-/// //                 ToolResultBlock{"toolu_2", "(no output)", false} }}
+/// @code{.test}
+/// @setup const Message m = tool_result_message({
+/// @setup     {.id = "toolu_1", .name = "read",  .output = "x = 1"},
+/// @setup     {.id = "toolu_2", .name = "write", .output = ""},
+/// @setup     {.id = "toolu_3", .name = "bash",  .output = "boom", .is_error = true}});
+/// m.role                                                    ==> Role::User
+/// m.content.size()                                          ==> 3u
+/// std::get<ToolResultBlock>(m.content.at(0)).tool_use_id     ==> "toolu_1"
+/// std::get<ToolResultBlock>(m.content.at(0)).content         ==> "x = 1"
+/// std::get<ToolResultBlock>(m.content.at(0)).is_error        ==> false
+/// // 空输出要有占位符，否则模型分不清「跑了但没输出」和「什么都没发生」
+/// (std::get<ToolResultBlock>(m.content.at(1)).content.empty()) ==> false
+/// std::get<ToolResultBlock>(m.content.at(2)).is_error        ==> true
 /// @endcode
 ///
 /// 把一批工具结果打成**一条** user Message。

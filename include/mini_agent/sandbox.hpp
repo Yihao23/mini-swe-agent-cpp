@@ -131,6 +131,10 @@ enum class Confirm { Deny, Once, Always };
 /// front end would push a message and wait, and a test hands over a lambda that
 /// answers immediately.
 ///
+/// @note 这一段是**伪代码**，不是 @code{.test}：里面的 `...` 编译不了。项目里
+///       其余的示例都是可执行的（见 docs/testing.md），这一个刻意例外 ——
+///       把它写成能编译的样子就得连终端输入一起造，示例会变成脚手架的展示。
+///
 /// @code
 /// AskFn asker = [](std::string_view tool, std::string_view subject,
 ///                  std::string_view reason) {

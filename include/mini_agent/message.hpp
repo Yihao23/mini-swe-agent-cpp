@@ -93,12 +93,18 @@ using ContentBlock =
 /// @note An assistant turn commonly holds several blocks — thinking, then text,
 ///       then one or more tool_use. All of them belong to the same message.
 ///
-/// @code
-/// Message m{Role::Assistant, {TextBlock{"Let me look"},
-///                             ToolUseBlock{"toolu_1", "read", {{"path","a.py"}}}}};
-/// to_json(m);
-/// // {"role":"assistant","content":[{"type":"text","text":"Let me look"},
-/// //                                {"type":"tool_use","id":"toolu_1",...}]}
+/// @code{.test}
+/// @setup const Message m{Role::Assistant, {TextBlock{"Let me look"},
+/// @setup                 ToolUseBlock{"toolu_1", "read", Json{{"path","a.py"}}}}};
+/// @setup const Json j = to_json(m);
+/// j.at("role")                            ==> "assistant"
+/// j.at("content").size()                  ==> 2u
+/// j.at("content").at(0).at("type")        ==> "text"
+/// j.at("content").at(1).at("type")        ==> "tool_use"
+/// // round-trip：解回来必须一模一样
+/// message_from_json(j).content.size()     ==> 2u
+/// message_from_json(j).role               ==> Role::Assistant
+/// to_json(message_from_json(j)).dump()    ==> j.dump()
 /// @endcode
 struct Message {
     Role role{};                       ///< Who it came from, as the API models it.
@@ -110,8 +116,13 @@ struct Message {
 /// @brief Serialise one block into its wire form.
 /// @param block The block.
 /// @return An object whose `type` field names the alternative.
-/// @code
-/// to_json(ContentBlock{TextBlock{"hi"}});   // {"type":"text","text":"hi"}
+/// @code{.test}
+/// to_json(ContentBlock{TextBlock{"hi"}})                     ==> Json({{"type","text"},{"text","hi"}})
+/// to_json(ContentBlock{ToolUseBlock{"t1","read",Json{{"p",1}}}}).at("type")  ==> "tool_use"
+/// to_json(ContentBlock{ToolUseBlock{"t1","read",Json{{"p",1}}}}).at("id")    ==> "t1"
+/// // is_error 只在为真时序列化
+/// to_json(ContentBlock{ToolResultBlock{"t1","ok",false}}).contains("is_error")  ==> false
+/// to_json(ContentBlock{ToolResultBlock{"t1","bad",true}}).at("is_error")        ==> true
 /// @endcode
 Json to_json(const ContentBlock& block);
 

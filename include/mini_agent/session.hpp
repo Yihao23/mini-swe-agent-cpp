@@ -107,15 +107,28 @@ class Session {
     ///       fewer than keep_recent messages, discarding the context the model
     ///       is working in right now.
     ///
-    /// @code
-    /// // history:  0 user "task1"        ← safe, but inside keep_recent
-    /// //           1 assistant tool_use
-    /// //           2 user tool_result    ← unsafe
-    /// //           3 assistant "done"
-    /// //           4 user "task2"        ← safe
-    /// //           5 assistant "working"
-    /// s.safe_split(3);   // scans back from index 3, finds nothing → 0 (no compaction)
-    /// // with two more messages appended, index 4 falls outside the window and is used
+    /// @code{.test}
+    /// // 0 user "task1"      ← 安全，但落在 keep_recent 窗口里
+    /// // 1 assistant tool_use
+    /// // 2 user tool_result  ← 不安全：切在这里会让 1 的 tool_use 变成孤儿
+    /// // 3 assistant "done"
+    /// // 4 user "task2"      ← 安全
+    /// // 5 assistant "working"
+    /// @setup Session s;
+    /// @setup s.messages() = {
+    /// @setup     Message{Role::User, {TextBlock{"task1"}}},
+    /// @setup     Message{Role::Assistant, {ToolUseBlock{"t1", "read", Json::object()}}},
+    /// @setup     Message{Role::User, {ToolResultBlock{"t1", "out", false}}},
+    /// @setup     Message{Role::Assistant, {TextBlock{"done"}}},
+    /// @setup     Message{Role::User, {TextBlock{"task2"}}},
+    /// @setup     Message{Role::Assistant, {TextBlock{"working"}}}};
+    /// // 从下标 3 往前扫，只找到落在窗口内的 0 → 返回 0，这次不压
+    /// s.safe_split(3)   ==> 0u
+    /// // 窗口收窄到 1，下标 4 就在窗口外了，切在那条真正的用户输入上
+    /// s.safe_split(1)   ==> 4u
+    /// // ⚠️ 永远不会返回 2 —— 那是 tool_result，切在那里下一轮请求必然 400
+    /// (s.safe_split(2) != 2u)   ==> true
+    /// (s.safe_split(4) != 2u)   ==> true
     /// @endcode
     ///
     /// 找一个安全的切分点，返回下标。
