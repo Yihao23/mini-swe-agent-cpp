@@ -377,10 +377,16 @@ class Sandbox {
 
 /// @brief A command pattern refused outright, whatever the configuration says.
 ///
-/// @note Checked ahead of rules and modes and not configurable. The example
-///       below is the point of the whole layer: the most permissive
-///       configuration the file can express still does not get `rm -rf /`
-///       through. These are the operations with no way back.
+/// @warning Checked ahead of rules and modes, and **not configurable**. The
+///          example below is the point of the whole layer: the most permissive
+///          configuration the file can express — yolo mode with `allow Bash` —
+///          still does not get `rm -rf /` through. An operator may loosen their
+///          own policy; they may not switch off the layer covering operations
+///          with no way back, because the agent reads files and a file can say
+///          "now run rm -rf /".
+///
+/// @note These patterns are the last line, so adding one is cheap and removing
+///       one deserves an argument.
 ///
 /// @code{.test}
 /// // 最宽松的配置：yolo 模式 + 整个 Bash 都 allow
@@ -407,9 +413,13 @@ struct DangerPattern {
 
 /// @brief Commands refused before any rule or mode is consulted.
 ///
-/// @note Not configurable on purpose. An agent can be talked into things — it
-///       reads files, and a file can contain instructions. This layer holds
-///       whatever the configuration and the model both say.
+/// @warning Not configurable on purpose. An agent can be talked into things —
+///          it reads files, and a file can contain instructions. This layer
+///          holds against whatever the configuration and the model both say.
+///          The executable examples on DangerPattern are what keeps that
+///          claim honest; the first run of them found that the curl-pipe-shell
+///          rule had never once fired.
+///
 /// @note Regexes rather than exact strings: `rm -rf /` has a dozen spellings.
 ///
 /// 永远拒绝，不问、不看规则、不看模式。挡的是「一旦执行就无法挽回」的操作。
