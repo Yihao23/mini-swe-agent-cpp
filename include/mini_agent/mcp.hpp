@@ -34,10 +34,26 @@ namespace mini {
 
 namespace fs = std::filesystem;
 
+/// @brief The MCP revision this client speaks, sent during the handshake.
 inline constexpr const char* kMcpProtocolVersion = "2024-11-05";
 
+/// @brief One external MCP server, spoken to over stdio.
+///
+/// @warning Owns a child process and two pipes. The destructor closes them;
+///          a leaked server is a process nobody knows about, still holding
+///          whatever it opened.
+///
+/// @note Non-copyable — two clients writing to one pipe interleave their
+///       JSON-RPC frames and neither gets a coherent answer.
+/// @note pimpl: the implementation carries a pid, two file descriptors and a
+///       request counter, none of which belongs in a header.
 class McpClient {
   public:
+    /// @brief Start a server process.
+    /// @param name    How its tools are prefixed, e.g. "filesystem".
+    /// @param command The executable.
+    /// @param args    Its arguments.
+    /// @param cwd     Working directory for the child.
     McpClient(std::string name, std::string command, std::vector<std::string> args,
               const fs::path& cwd);
     ~McpClient();
@@ -45,12 +61,41 @@ class McpClient {
     McpClient(const McpClient&) = delete;
     McpClient& operator=(const McpClient&) = delete;
 
-    /// 失败返回错误描述 —— 一个外部 server 起不来不该拖垮整个 agent
+    /// @brief Perform the handshake.
+    ///
+    /// @return The server's capabilities, or a description of what went wrong.
+    ///
+    /// @warning `notifications/initialized` must be sent after the response
+    ///          arrives. Servers that wait for it will answer nothing until it
+    ///          does, and the symptom is a hang rather than an error.
+    ///
+    /// @note An error is returned rather than thrown: one external server that
+    ///       will not start should cost its own tools, not the whole agent.
     std::expected<Json, std::string> initialize();
+
+    /// @brief Ask what tools the server offers.
+    /// @return The `tools` array, or an error description.
     std::expected<Json, std::string> list_tools();
+
+    /// @brief Invoke one of the server's tools.
+    ///
+    /// @param name The tool's own name, without this client's prefix.
+    /// @param args Arguments, forwarded as-is.
+    /// @return The output text and whether it is an error, or a transport-level
+    ///         error description.
+    ///
+    /// @warning ⚠️ Responses must be matched by request id. A server may
+    ///          interleave notifications, which carry no id — read past them
+    ///          until the id matches, or a log line arrives where an answer was
+    ///          expected.
     std::expected<std::pair<std::string, bool>, std::string> call_tool(std::string_view name,
                                                                       const Json& args);
+
+    /// @brief The server's name, used as the tool-name prefix.
+    /// @return The name given at construction.
     const std::string& name() const;
+
+    /// @brief Shut the server down. Idempotent; the destructor calls it.
     void close();
 
   private:
@@ -58,16 +103,34 @@ class McpClient {
     std::unique_ptr<Impl> impl_;
 };
 
+/// @brief What loading the MCP configuration produced.
 struct McpLoadResult {
-    std::vector<ToolPtr> tools;
-    std::vector<std::shared_ptr<McpClient>> clients;   // 要保活：工具持有 client
+    std::vector<ToolPtr> tools;   ///< Ready to register, names already prefixed.
+
+    /// @brief The clients, kept alive because the tools hold them.
+    /// @warning Dropping this vector destroys the servers while their tools are
+    ///          still registered, and the next call reaches a closed pipe.
+    std::vector<std::shared_ptr<McpClient>> clients;
+
+    /// @brief Servers that would not start. Non-fatal; shown via App::warnings.
     std::vector<std::string> errors;
 };
 
-/// 读 .mini-agent/mcp.json，连所有 server。
-/// 远程工具名字形如 `mcp__filesystem__read_file`（前缀防重名）。
-/// 远程工具的副作用未知 → read_only=false, requires_permission=true，保守处理。
-/// TODO(Stage 7)
+/// @brief Read the MCP configuration and connect to every server in it.
+///
+/// @param config_path `.mini-agent/mcp.json`; a missing file is not an error.
+/// @param cwd         Working directory for the server processes.
+/// @return The tools, the clients keeping them alive, and any failures.
+///
+/// @warning Remote tools declare `read_only = false` and
+///          `requires_permission = true`. What a third-party server does is
+///          unknown, and the safe assumption is the expensive one.
+///
+/// @note Tool names are prefixed `mcp__<server>__<tool>` so two servers
+///       offering `read_file` do not collide, and so a permission rule can
+///       name one server's tools specifically.
+/// @note A server that fails to start is recorded in `errors` rather than
+///       thrown. Losing one server's tools beats not starting.
 McpLoadResult load_mcp_servers(const fs::path& config_path, const fs::path& cwd);
 
 }  // namespace mini

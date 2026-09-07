@@ -22,20 +22,53 @@
 
 namespace mini {
 
+/// @brief Runs the tools a turn asked for, and turns every outcome into a result.
+///
+/// @note This is where the permission gate is consulted, and the only place.
+///       Tools make no authorisation decisions of their own — spread that
+///       across a dozen tools and there is no way to tell whether the coverage
+///       is complete.
+/// @note Holds references, not copies: whatever they point at must outlive the
+///       agent run, which App guarantees.
 class Executor {
   public:
+    /// @brief Wire the executor to a registry and a context.
+    /// @param registry  Where tool names are resolved.
+    /// @param ctx       ⚠️ Held by reference; must outlive this executor.
+    /// @param on_event  Progress notifications; empty is fine.
     Executor(ToolRegistry& registry, ToolContext& ctx, EventSink on_event = {});
 
-    /// 执行一个工具调用。**任何情况下都要返回 ToolResultEvent，不能抛异常。**
-    ///   1. 工具不存在 → error 结果 + 列出可用工具名（帮模型自纠）
-    ///   2. 【Stage 3】过闸 sandbox.authorize()
-    ///   3. try 调 run，catch(...) → error 结果
-    ///   4. 截断输出、记录耗时
-    /// TODO(Stage 2)
+    /// @brief Run one tool call.
+    ///
+    /// @param call What the model asked for.
+    /// @return A result, always — including for every failure.
+    ///
+    /// @warning **Never throws.** A tool that throws, a name that does not
+    ///          exist, a call the sandbox refuses: each becomes a result the
+    ///          model can read and work around. An exception here would end the
+    ///          run over one bad call, and the model would never learn why.
+    ///
+    /// @note An unknown name comes back listing the available ones, so the
+    ///       model can correct its own typo on the next turn rather than
+    ///       guessing again.
+    /// @note catch(std::exception&) and catch(...) are both present. The first
+    ///       can report what(); the second is what stops a throw of some other
+    ///       type from taking the process down.
     ToolResultEvent run_one(const ToolCallEvent& call);
 
-    /// 一批。并发判据：**所有**工具都 read_only 才并发。
-    /// TODO(Stage 2)
+    /// @brief Run a batch of calls from one turn.
+    ///
+    /// @param calls Every tool_use block the response contained.
+    /// @return One result per call, in the same order.
+    ///
+    /// @warning Order must be preserved. Results are matched to calls by
+    ///          tool_use_id, but a reordered batch makes the transcript
+    ///          unreadable for anyone debugging it.
+    ///
+    /// @note Concurrency is all-or-nothing: the batch runs in parallel only
+    ///       when **every** tool in it is read_only(). One writer means the
+    ///       whole batch is serialised, because two tools racing on the same
+    ///       tree is not something the model can reason about.
     std::vector<ToolResultEvent> run_batch(const std::vector<ToolCallEvent>& calls);
 
   private:
@@ -44,9 +77,23 @@ class Executor {
     EventSink on_event_;
 };
 
-/// 截断超长输出。
-/// 想想：只留头部，还是头尾都留？要不要告诉模型"我截断了多少"？
-/// （一个 grep 可能返回 10 万行，而尾部往往最新最相关。）
+/// @brief Cut oversized tool output down to size.
+///
+/// @param text  What the tool produced.
+/// @param limit Maximum bytes to keep.
+/// @return The text unchanged when it fits, otherwise a shortened version that
+///         says how much was dropped.
+///
+/// @warning `text.size() - limit` underflows when the text is shorter than the
+///          limit — size_t is unsigned, and the difference becomes astronomical.
+///          Compare before subtracting. This project has made that mistake
+///          twice.
+///
+/// @note Cuts on a UTF-8 character boundary. Splitting a multi-byte sequence
+///       produces bytes the API rejects, and the failure names the request
+///       rather than the truncation.
+/// @note Says how much was removed. Silently shortened output reads to the
+///       model as the whole answer, and it draws conclusions from a fragment.
 std::string truncate_output(std::string_view text, std::size_t limit);
 
 }  // namespace mini

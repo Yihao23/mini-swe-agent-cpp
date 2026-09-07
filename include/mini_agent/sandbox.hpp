@@ -38,10 +38,11 @@ enum class Action { Allow, Deny, Ask };   // ← 三态，不是布尔。Ask 是
 ///       what would have to change: "命中 deny 规则" or "危险命令: rm -rf /"
 ///       let it pick another approach; "denied" does not.
 struct Decision {
-    Action action = Action::Ask;
-    std::string reason;
+    Action action = Action::Ask;   ///< The verdict. Defaults to Ask — err toward the human.
+    std::string reason;            ///< Why, in words the model can act on.
 
     /// @brief Was this permitted outright?
+    /// @return true only for Allow.
     /// @note Ask counts as not allowed. By the time the executor sees a
     ///       Decision, confirm() has already resolved every Ask.
     bool allowed() const { return action == Action::Allow; }
@@ -59,8 +60,8 @@ struct Decision {
 ///
 /// 一条权限规则：`Bash(git status:*)` / `Write(src/**)` / `Bash`
 struct Rule {
-    std::string tool;
-    std::optional<std::string> pattern;   // nullopt = 整个工具都匹配
+    std::string tool;                     ///< Tool name; compared case-insensitively.
+    std::optional<std::string> pattern;   ///< Glob over the subject; nullopt matches the whole tool.
 
     /// @brief Parse one rule string.
     ///
@@ -366,7 +367,15 @@ class Sandbox {
     /// 用户选了"以后都允许"。
     void remember_allow(std::string_view rule_name, std::string_view subject);
 
+    /// @brief Change the baseline mode for the rest of the session.
+    /// @param m The new mode.
+    /// @note The CLI's `/mode` command. Rules and kDangerous are unaffected —
+    ///       this only moves the fallback used when nothing matched.
     void set_mode(PermissionMode m) { mode_ = m; }
+
+    /// @brief The mode currently in effect.
+    /// @return The baseline, which may differ from cfg.permission_mode after
+    ///         set_mode.
     PermissionMode mode() const { return mode_; }
 
   private:

@@ -128,17 +128,27 @@ Every header now opens with:
 /// @brief Running a subprocess with a timeout — the most systems-level file here (Stage 2).
 ```
 
-### Why `WARN_IF_UNDOCUMENTED` is NO
+### Coverage is enforced
 
-Turning it on reports 264 "not documented" against 2 real errors — 132:1, which
-means nobody reads it. Documentation coverage is a gradual goal (`loop`, `app`,
-`config`, `executor`, `llm`, `mcp`, `memory`, `skills`, `subagent` are still
-undone) and does not belong behind the same switch as a mistake that can be
-fixed on the spot. To see the coverage gap:
+`WARN_IF_UNDOCUMENTED = YES`: every public symbol under `include/` must be
+documented, and adding one that is not fails `--target docs` on the spot.
 
-```bash
-(cat Doxyfile; echo WARN_IF_UNDOCUMENTED=YES) | doxygen -
-```
+The switch started as NO — 264 "not documented" against 2 real errors is 132:1,
+and nobody reads output at that ratio. It went on once the backlog was cleared,
+and from there it does not go back.
+
+What counts as documented is stricter than it sounds:
+
+| | Enough? |
+|---|---|
+| `@brief` alone | ✗ A non-void function needs `@return` |
+| One `@param` missing | ✗ Every parameter |
+| An undocumented struct member | ✗ Use a trailing `///<` |
+
+Clearing the 315 entries showed something worth recording: a good many
+contracts I believed were written down were written down halfway. `Config`'s 21
+fields had section headers (`// --- 模型 ---`) and not one line saying what
+changing a field does.
 
 ## 4. Mutation testing
 

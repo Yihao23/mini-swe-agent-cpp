@@ -9,19 +9,18 @@
 # 错误现在没有任何机制会发现，和"文档过期"是同一类问题。所以：
 #
 #   EXTRACT_ALL          = NO    没写注释的就别出现，别用自动摘要糊过去
+#   WARN_IF_UNDOCUMENTED = YES   公开接口漏了文档 → 报
 #   WARN_IF_DOC_ERROR    = YES   @param 拼错参数名、@ref 指不到东西 → 报
 #   WARN_NO_PARAMDOC     = YES   写了 @param 但漏了某个参数 → 报
 #   WARN_AS_ERROR = FAIL_ON_WARNINGS   报了就是失败，不是"仅供参考"
 #
-# ── 为什么 WARN_IF_UNDOCUMENTED 是 NO ───────────────────────────────────────
+# ── WARN_IF_UNDOCUMENTED 现在是 YES ────────────────────────────────────────
 #
-# 打开它现在会报 264 条「还没写文档」，把 2 条真正的错误淹掉 —— 信噪比 132:1，
-# 结果就是没人看。文档覆盖率是个渐进目标（loop / app / config / executor /
-# llm / mcp / memory / skills / subagent 还没做），不该和"已有文档写错了"
-# 这种当场可修的问题混在一个开关里。
+# 一开始是 NO：那时有 264 条「还没写文档」，会把 2 条真错误淹掉，信噪比 132:1，
+# 结果就是没人看。现在 include/ 下每一个公开符号都有文档了，这个开关才有意义 ——
+# 它从此是**不可回退的**：新加一个没写文档的函数，`--target docs` 当场失败。
 #
-# 想看覆盖率缺口：
-#     doxygen -d Preprocessor 2>/dev/null; (cat Doxyfile; echo WARN_IF_UNDOCUMENTED=YES) | doxygen -
+# 有返回值的函数必须有 @return，有参数的必须每个都有 @param。只写 @brief 不够。
 #
 # 只扫 include/。src/ 里的类全在匿名命名空间里（builtin.hpp 开头讲了为什么），
 # 要提取它们得开 EXTRACT_ANON_NSPACES + EXTRACT_STATIC，而那会把一堆实现细节
@@ -54,7 +53,7 @@ HIDE_UNDOC_MEMBERS     = NO      # 未文档化的成员仍列出（但不编造
 # --- 警告：这份配置的重点 ---------------------------------------------------
 QUIET                  = YES
 WARNINGS               = YES
-WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_UNDOCUMENTED   = YES
 WARN_IF_DOC_ERROR      = YES
 WARN_IF_INCOMPLETE_DOC = YES
 WARN_NO_PARAMDOC       = YES     # 有 @param 但漏了某个参数 → 报

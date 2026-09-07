@@ -34,51 +34,127 @@ namespace mini {
 
 struct Config;
 
+/// @brief Running token totals for a session.
+///
+/// @note The cache figures are the ones worth watching. A healthy long run
+///       shows cache_write once or twice — at the start, and after a
+///       compaction — with cache_read large on every turn after. cache_write
+///       climbing every turn while cache_read stays at zero means the prefix
+///       is changing and the bill is roughly ten times what it should be,
+///       with nothing failing to say so.
 struct Usage {
-    long input_tokens = 0;
-    long output_tokens = 0;
-    long cache_read = 0;
-    long cache_write = 0;
-    int requests = 0;
+    long input_tokens = 0;    ///< Tokens sent that did not come from cache.
+    long output_tokens = 0;   ///< Tokens generated.
+    long cache_read = 0;      ///< Served from cache, at about a tenth the price.
+    long cache_write = 0;     ///< Written into cache, at about 1.25×.
+    int requests = 0;         ///< How many calls were made.
 
+    /// @brief Add one response's usage object.
+    /// @param usage_json The `usage` field of a response.
+    /// @note Tolerates missing fields — the API adds them over time, and an
+    ///       unknown one must not break accounting.
     void add(const Json& usage_json);
+
+    /// @brief Every input token, cached or not.
+    /// @return input_tokens + cache_read + cache_write.
     long total_input() const;
-    std::string summary() const;   // 一行统计，给 /usage 用
+
+    /// @brief One line of statistics, for `/usage`.
+    /// @return A human-readable summary including the cache hit rate.
+    std::string summary() const;
 };
 
+/// @brief One piece of the system prompt.
+///
+/// @warning Every block must be byte-stable across requests. The cache matches
+///          a prefix byte for byte, so a timestamp in any of them costs the
+///          whole conversation after it, every turn, silently.
 struct SystemBlock {
-    std::string text;
-    bool cache_breakpoint = false;   // 打在最后一块上，一次缓存 tools + system
+    std::string text;                ///< The prose. Never empty — empty is still bytes.
+    bool cache_breakpoint = false;   ///< 打在最后一块上，一次缓存 tools + system
 };
 
+/// @brief Why a request failed, as a value rather than an exception.
+///
+/// @note Kept apart from a successful response so the caller can decide: 429
+///       and 529 are worth retrying, 401 never is, and a network blip should
+///       not end the agent loop.
 struct LlmError {
-    int http_status = 0;     // 0 = 网络层失败
-    std::string type;        // rate_limit_error / overloaded_error / ...
-    std::string message;
+    int http_status = 0;     ///< 0 = 网络层失败
+    std::string type;        ///< rate_limit_error / overloaded_error / ...
+    std::string message;     ///< Human-readable; surfaced to the user.
 };
 
+/// @brief One successful response.
 struct LlmResponse {
+    /// @brief The blocks, verbatim.
+    /// @warning Thinking signatures live here and the API validates them next
+    ///          turn. They must reach the history unaltered.
     std::vector<ContentBlock> content;
+
+    /// @brief tool_use | end_turn | max_tokens | refusal.
+    /// @note Only end_turn means the model finished on its own.
     std::string stop_reason;
-    std::string model;
-    Usage usage;
+
+    std::string model;   ///< Which model answered; may differ from what was asked.
+    Usage usage;         ///< This call's token counts.
 };
 
+/// @brief One request to the model.
+///
+/// @warning `system` and `messages` are **non-owning pointers**. Whatever they
+///          point at has to outlive the call — which is why Agent::run hoists
+///          both out of the loop rather than building them per turn.
+///
+/// @note The rendering order is tools → system → messages, and the cache
+///       matches a byte-exact prefix. Most stable first, most volatile last.
 struct LlmRequest {
-    const std::vector<SystemBlock>* system = nullptr;
-    const std::vector<Message>* messages = nullptr;
+    const std::vector<SystemBlock>* system = nullptr;   ///< ⚠️ Non-owning; must outlive the call.
+    const std::vector<Message>* messages = nullptr;     ///< ⚠️ Non-owning; must outlive the call.
+
+    /// @brief The tool definitions, already sorted by name.
+    /// @warning Sorted, because this sits at the very front of the request and
+    ///          an unstable order invalidates the whole cache.
     Json tools = Json::array();
-    std::string model;          // 空 = 用 cfg.model
-    int max_tokens = 0;         // 0 = 用 cfg.max_tokens
+
+    std::string model;          ///< 空 = 用 cfg.model
+    int max_tokens = 0;         ///< 0 = 用 cfg.max_tokens
+
+    /// @brief Called per text chunk while streaming.
+    /// @note Empty means not streaming. Agent::run then emits one TextEvent
+    ///       itself — doing both prints the response twice.
     std::function<void(std::string_view)> on_text;
+
+    /// @brief Called per thinking chunk while streaming.
     std::function<void(std::string_view)> on_thinking;
 };
 
+/// @brief The interface between the agent and a model.
+///
+/// @note Two implementations, and the virtual is worth it for exactly one
+///       reason: FakeLlm lets every test run offline in under a second. This
+///       is the highest-value abstraction in the project.
+/// @note Knows nothing about agents — no tool loop, no steps. It sends a
+///       request and returns a response.
+/// @warning The destructor is virtual because AnthropicClient is deleted
+///          through this pointer. Without it, the pimpl and the curl handle
+///          leak on every session.
 class LlmClient {
   public:
     virtual ~LlmClient() = default;
-    /// 失败是**值**不是异常 —— 429/529 要能重试，网络抖动不该炸掉 agent 循环
+
+    /// @brief Send one request.
+    ///
+    /// @param req What to send.
+    /// @return The response, or why it failed.
+    ///
+    /// @warning **Failure is a value, not an exception.** 429 and 529 are
+    ///          retryable and a network blip is routine; throwing would end
+    ///          the agent loop over something the caller could have handled.
     virtual std::expected<LlmResponse, LlmError> complete(const LlmRequest& req) = 0;
+
+    /// @brief Running totals for this client.
+    /// @return Token counts accumulated across every call.
     virtual const Usage& usage() const = 0;
 };
 
@@ -97,13 +173,29 @@ class LlmClient {
 // ---------------------------------------------------------------------------
 class AnthropicClient final : public LlmClient {
   public:
+    /// @brief Build a client.
+    /// @param cfg ⚠️ Held by reference; must outlive the client.
+    /// @note The API key comes from ANTHROPIC_API_KEY, read at request time
+    ///       rather than stored — one fewer copy of a secret in memory.
     explicit AnthropicClient(const Config& cfg);
     ~AnthropicClient() override;
 
     std::expected<LlmResponse, LlmError> complete(const LlmRequest& req) override;
+
+    /// @brief Running totals for this client.
+    /// @return Token counts accumulated across every call.
     const Usage& usage() const override { return usage_; }
 
-    /// 纯函数，单独暴露出来是为了能单测（不用发网络请求）
+    /// @brief Render a request into the JSON body.
+    ///
+    /// @param cfg    Supplies the defaults a request left unset.
+    /// @param req    What to send.
+    /// @param stream Whether to ask for SSE.
+    /// @return The complete request body.
+    ///
+    /// @note Static and pure, so the request shape can be tested without a
+    ///       network call — which is where the ordering that keeps the cache
+    ///       alive gets verified.
     static Json build_body(const Config& cfg, const LlmRequest& req, bool stream);
 
   private:
@@ -123,30 +215,68 @@ class AnthropicClient final : public LlmClient {
 ///       {{ FakeBlock::text("这是一个打招呼函数") },          "end_turn"},
 ///   });
 // ---------------------------------------------------------------------------
+/// @brief One block in a scripted response.
+/// @note Either text or a tool call, never both — `tool_name` being empty is
+///       what distinguishes them.
 struct FakeBlock {
-    std::string text;      // 二选一
-    std::string tool_name;
-    Json input = Json::object();
+    std::string text;                 ///< Set for a text block.
+    std::string tool_name;            ///< Set for a tool call; empty means text.
+    Json input = Json::object();      ///< Arguments, for a tool call.
 
+    /// @brief Build a text block.
+    /// @param t The text.
+    /// @return The block.
     static FakeBlock text_block(std::string t);
+
+    /// @brief Build a tool call.
+    /// @param name  Which tool.
+    /// @param input Its arguments.
+    /// @return The block. The id is generated by FakeLlm::complete, which keeps
+    ///         ids unique even among several tools in one turn.
     static FakeBlock tool(std::string name, Json input);
 };
 
+/// @brief A model that replays a script.
+///
+/// @warning When the script runs out it returns a fallback text response
+///          rather than failing. A test that needs a failed request has to
+///          supply its own client — this one cannot model that path, which is
+///          the one where a mistake destroys data.
+///
+/// @note Records every call, so a test can assert on what was *sent*: the
+///       byte-stability of the system prompt, the tool ordering, whether
+///       compaction asked for the right things.
 class FakeLlm final : public LlmClient {
   public:
+    /// @brief One scripted response.
     struct Turn {
-        std::vector<FakeBlock> blocks;
-        std::string stop_reason;
+        std::vector<FakeBlock> blocks;   ///< What the response contains.
+        std::string stop_reason;         ///< tool_use | end_turn | ...
     };
 
+    /// @brief Build a scripted client.
+    /// @param cfg    ⚠️ Held by reference; must outlive the client.
+    /// @param script Responses to hand back, in order.
     FakeLlm(const Config& cfg, std::vector<Turn> script);
 
     std::expected<LlmResponse, LlmError> complete(const LlmRequest& req) override;
+
+    /// @brief Running totals; requests are counted, tokens are not simulated.
+    /// @return The accumulated usage.
     const Usage& usage() const override { return usage_; }
 
-    /// 测试要断言"第几轮发了什么"
+    /// @brief Everything that was sent, one entry per call.
+    /// @return system, messages and tools as they went out.
+    /// @note This is what lets a test assert on the request rather than the
+    ///       response — the byte-stable system prompt, the sorted tools, the
+    ///       compaction instruction.
     const std::vector<Json>& calls() const { return calls_; }
-    void push_front(Turn turn);   // 子 agent 测试要往剧本中间插
+
+    /// @brief Insert a response at the front of the remaining script.
+    /// @param turn What to return next.
+    /// @note Sub-agent tests need this: the parent's script is already
+    ///       running when the sub-agent's response has to be arranged.
+    void push_front(Turn turn);
 
   private:
     const Config& cfg_;

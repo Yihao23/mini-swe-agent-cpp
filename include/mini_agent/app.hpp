@@ -36,10 +36,36 @@ namespace mini {
 
 class McpClient;
 
+/// @brief Assembly: builds every layer and hands out references to them.
+///
+/// Nothing here has logic of its own. Its job is construction order and
+/// lifetime — Sandbox borrows the Config, ToolContext borrows the Sandbox and
+/// the Session, Agent borrows all of them. Get the order wrong and a member
+/// binds to something not built yet.
+///
+/// @warning Non-movable, and deliberately. The members point at each other, so
+///          moving the App would leave those pointers aimed at the old
+///          addresses. Deleting the move is what makes that a compile error
+///          rather than a use-after-move nobody notices.
+///
+/// @note pimpl, so member declaration order — which is construction order —
+///       stays in the .cpp where it can be reasoned about, instead of in a
+///       header that every layer includes.
 class App {
   public:
-    /// llm 传空则内部建 AnthropicClient；测试传 FakeLlm。
-    /// asker 为空 = 非交互模式。
+    /// @brief Build everything.
+    ///
+    /// @param cfg      Taken by value; the App owns the copy every layer borrows.
+    /// @param llm      Null builds an AnthropicClient. Tests pass a FakeLlm.
+    /// @param asker    How to ask a human. Empty means non-interactive, and
+    ///                 the sandbox then resolves Ask to Deny.
+    /// @param on_event Progress notifications; empty is fine.
+    /// @param session  Resume from this one; nullopt starts fresh.
+    ///
+    /// @note A non-fatal problem — an MCP server that will not start, a
+    ///       permission rule that will not parse — is collected into
+    ///       warnings() rather than thrown. Failing to start over one bad line
+    ///       in a config file is worse than starting without it.
     App(Config cfg, std::unique_ptr<LlmClient> llm = nullptr, AskFn asker = {},
         EventSink on_event = {}, std::optional<Session> session = std::nullopt);
     ~App();
@@ -49,16 +75,37 @@ class App {
     App(App&&) = delete;              // ← 见上面"成员互指"的说明
     App& operator=(App&&) = delete;
 
+    /// @brief The agent loop. @return A reference owned by this App.
     Agent& agent();
+    /// @brief The conversation history. @return A reference owned by this App.
     Session& session();
+    /// @brief The tools. @return A reference owned by this App.
     ToolRegistry& registry();
+    /// @brief The permission gate. @return A reference owned by this App.
     Sandbox& sandbox();
+    /// @brief The model client. @return A reference owned by this App.
     LlmClient& llm();
+
+    /// @brief Long-term memory (Stage 5).
+    /// @return nullptr when disabled or not yet implemented — hence a pointer.
     Memory* memory();
+    /// @brief Skills (Stage 5).
+    /// @return nullptr when disabled or not yet implemented.
     SkillRegistry* skills();
+    /// @brief Background tasks (Stage 6).
+    /// @return nullptr when not yet implemented.
     BackgroundManager* background();
+
+    /// @brief The configuration every layer was built from.
+    /// @return A const reference; it does not change after construction.
     const Config& cfg() const;
-    const std::vector<std::string>& warnings() const;   // MCP 起不来之类的非致命问题
+
+    /// @brief Non-fatal problems noticed while starting up.
+    /// @return Messages for the user: an MCP server that would not start, a
+    ///         permission rule that would not parse. Empty on a clean start.
+    /// @note These are collected rather than thrown so one bad line in a config
+    ///       file cannot stop the agent from running.
+    const std::vector<std::string>& warnings() const;
 
   private:
     struct Impl;                      // 成员顺序敏感，全关在 .cpp 里更省心

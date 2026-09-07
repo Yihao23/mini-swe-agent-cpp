@@ -38,16 +38,21 @@ enum class TaskStatus { Pending, Running, Done, Failed, Blocked };
 ///       unrepresentable. Flat fields win here because the type is read far
 ///       more often than written, and every read would otherwise need a visit.
 struct Task {
-    std::string id;
-    std::string prompt;
-    std::vector<std::string> deps;
-    int priority = 0;
-    std::string agent_type = "general";
+    std::string id;                 ///< Unique within the graph; what deps point at.
+    std::string prompt;             ///< What this task should do.
+    std::vector<std::string> deps;  ///< Ids that must finish before this may start.
+    int priority = 0;               ///< Higher runs first among ready tasks.
+    std::string agent_type = "general";   ///< Which sub-agent profile to use.
 
-    TaskStatus status = TaskStatus::Pending;
-    std::string result;
-    std::string error;
-    int seq = 0;             // 入图顺序，同优先级时的稳定排序键
+    TaskStatus status = TaskStatus::Pending;  ///< Where it stands.
+    std::string result;             ///< Set when Done; what the runner returned.
+    std::string error;              ///< Set when Failed or Blocked; why.
+
+    /// @brief Insertion order, the tie-break among equal priorities.
+    /// @note Without it, ties resolve by the map's iteration order, which is
+    ///       the id's lexicographic order — renaming a task would change the
+    ///       execution order and nothing would be reproducible.
+    int seq = 0;
 };
 
 /// @brief How one task is executed: runner(task, upstream results) → its output.
@@ -168,11 +173,13 @@ class Scheduler {
     void run(const TaskRunner& runner, const TaskEventSink& on_event = {});
 
     /// @brief The task map, for inspecting results after run().
+    /// @return Every task by id, carrying its final status and output.
     const std::map<std::string, Task>& tasks() const { return tasks_; }
 
     /// @brief A human-readable view of the graph and its current state.
     /// @note Ordered by insertion, which matches how the caller thinks about
     ///       the graph better than the id's alphabetical order would.
+    /// @return One line per task, in insertion order.
     std::string render() const;
 
   private:
@@ -194,6 +201,9 @@ class Scheduler {
     int counter_ = 0;
 };
 
+/// @brief The display name of a status.
+/// @param s The status.
+/// @return A stable lowercase name, used by render() and the event sink.
 std::string_view to_string(TaskStatus s);
 
 }  // namespace mini

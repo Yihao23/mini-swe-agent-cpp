@@ -24,12 +24,12 @@ namespace mini {
 ///       arrive as a dozen events. Non-streaming emits one for the whole turn.
 ///       Renderer tracks whether it is mid-line because of this.
 struct TextEvent {
-    std::string text;
+    std::string text;   ///< The chunk, or the whole turn when not streaming.
 };
 /// @brief A fragment of the model's reasoning, shown dimmed.
 /// @note Suppressed entirely when Config::show_thinking is false.
 struct ThinkingEvent {
-    std::string text;
+    std::string text;   ///< A fragment of the reasoning summary.
 };
 /// @brief A tool the model asked for. Doubles as the executor's input type.
 ///
@@ -38,20 +38,20 @@ struct ThinkingEvent {
 ///       internal event that is never serialised. Merging them would make
 ///       message.hpp — the bottom layer — depend on parser.hpp above it.
 struct ToolCallEvent {
-    std::string id;
-    std::string name;
-    Json input;
+    std::string id;     ///< toolu_...; what the result must be paired back to.
+    std::string name;   ///< The tool the model asked for.
+    Json input;         ///< Arguments, exactly as the model sent them.
 };
 /// @brief What a tool produced. Doubles as the executor's output type.
 ///
 /// @note `name` and `duration_sec` are for the display only — tool_result_message
 ///       drops them when building the block that goes back to the API.
 struct ToolResultEvent {
-    std::string id;
-    std::string name;
-    std::string output;
-    bool is_error = false;
-    double duration_sec = 0.0;
+    std::string id;             ///< The tool_use id this answers.
+    std::string name;           ///< Display only; never reaches the API.
+    std::string output;         ///< What the tool produced, already truncated.
+    bool is_error = false;      ///< Failure is a value the model reads, not an exception.
+    double duration_sec = 0.0;  ///< Display only.
 };
 /// @brief Why the turn ended.
 ///
@@ -59,8 +59,9 @@ struct ToolResultEvent {
 ///       worth surfacing: `max_steps` in particular means the task may be
 ///       incomplete, and showing it as success would mislead.
 struct StopEvent {
-    std::string reason;   // end_turn | max_tokens | refusal | max_steps | interrupt | compacted
-    std::string detail;
+    /// @brief end_turn | max_tokens | refusal | max_steps | interrupt | compacted.
+    std::string reason;
+    std::string detail;   ///< Extra context, e.g. the error message. Often empty.
 };
 
 /// @brief Everything the UI can be told about, as a closed set.
@@ -68,7 +69,8 @@ struct StopEvent {
 /// A variant so that adding a sixth event breaks every std::visit at compile
 /// time. The alternative — an event base class plus dynamic_cast — would let a
 /// new event slip silently into whatever default branch exists.
-using AgentEvent = std::variant<TextEvent, ThinkingEvent, ToolCallEvent, ToolResultEvent, StopEvent>;
+using AgentEvent =
+    std::variant<TextEvent, ThinkingEvent, ToolCallEvent, ToolResultEvent, StopEvent>;
 
 /// @brief Where events go. Empty is valid and means nobody is watching.
 ///
@@ -94,11 +96,14 @@ using EventSink = std::function<void(const AgentEvent&)>;
 /// // p.wants_tools() == true
 /// @endcode
 struct ParsedResponse {
-    std::string text;                      // 拼接后的可见文本
-    std::string thinking;                  // 拼接后的思考摘要
-    std::vector<ToolCallEvent> tool_calls;
-    std::string stop_reason;
-    Message message;                       // 写回历史的 assistant 轮
+    std::string text;                       ///< Every TextBlock, concatenated.
+    std::string thinking;                   ///< Every ThinkingBlock, concatenated.
+    std::vector<ToolCallEvent> tool_calls;  ///< In the order the model asked.
+    std::string stop_reason;                ///< Passed through from the response.
+
+    /// @brief The assistant turn to append to the history.
+    /// @warning Holds the blocks verbatim, signatures included.
+    Message message;
 
     /// @brief Should the loop run tools and go round again?
     ///

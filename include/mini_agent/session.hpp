@@ -34,22 +34,33 @@ class Session {
     Session();
 
     /// @brief Session with a specific id — used when resuming from disk.
+    /// @param id The id read back from the file.
     explicit Session(std::string id);
 
     // -- Stage 1 -------------------------------------------------------------
     /// @brief Append a message and write the session to disk.
     /// @note Saving here rather than leaving it to the caller: forgetting one
     ///       save loses the turn, and there is no signal that it happened.
+    /// @param msg The turn to record.
     void append(Message msg);              // 追加并落盘
 
     /// @brief Append a plain user turn and save.
+    /// @param text What the user typed.
     void add_user_text(std::string text);
 
     /// @brief The most recent assistant text, searching backwards.
     /// @return Empty when no assistant turn has produced text yet.
     std::string last_assistant_text() const;
 
+    /// @brief The history, for reading.
+    /// @return Every turn in order, oldest first.
     const std::vector<Message>& messages() const { return messages_; }
+
+    /// @brief The history, for writing.
+    /// @return A mutable reference.
+    /// @warning Mutating through this does **not** save. append() exists so
+    ///          that the common path cannot forget; this overload is for
+    ///          compaction and for tests that build a history directly.
     std::vector<Message>& messages() { return messages_; }
 
     /// @brief Resolved absolute path → mtime at the time it was read.
@@ -65,6 +76,7 @@ class Session {
     ///       one re-read; a miss costs their work.
     ///
     /// path -> 上次读取时的 mtime。edit 的陈旧检查用。
+    /// @return Resolved absolute path → the mtime read recorded for it.
     std::map<std::string, std::filesystem::file_time_type>& read_files() { return read_files_; }
 
     // -- Stage 4 -------------------------------------------------------------
@@ -75,6 +87,7 @@ class Session {
     ///       the threshold has slack in it anyway.
     ///
     /// 粗估上下文大小。提示：序列化后的字节数 / 4 就够用，别一上来就调 count_tokens。
+    /// @return Roughly how many tokens the history would cost.
     int estimated_tokens() const;
 
     /// @brief Index where the history can be cut without breaking tool pairing.
@@ -145,10 +158,19 @@ class Session {
     ///         place rather than overwritten.
     /// @note path_ is set to the file it came from, not rebuilt from the id —
     ///       a session whose filename was changed still writes back to itself.
+    /// @param path The file to read.
     static Session load(const fs::path& path);
 
+    /// @brief This session's id, which is also its filename stem.
+    /// @return The id, e.g. "sess_17f3a2b1c".
     const std::string& id() const { return id_; }
+
+    /// @brief How many times this session has been compacted.
+    /// @return The count; shown by /usage, and persisted with the session.
     int compactions() const { return compactions_; }
+
+    /// @brief Where this session writes itself.
+    /// @return The bound path, or empty for an in-memory session.
     const fs::path& path() const { return path_; }
 
   private:

@@ -36,29 +36,71 @@ namespace mini {
 
 class Sandbox;
 
+/// @brief Per-agent overrides, so one Config can serve several agents.
+///
+/// @note Every field's empty/zero value means "use the Config". A sub-agent
+///       differs from the main one in three or four ways, and listing only
+///       those is clearer than copying a Config and editing it.
 struct AgentOptions {
-    std::string name = "main";
-    std::string model;          // 空 = cfg.model
-    int max_steps = 0;          // 0 = cfg.max_steps
-    std::string system_extra;
-    std::string identity;       // 子 agent 覆盖身份段
+    std::string name = "main";   ///< Shown in events and logs.
+    std::string model;           ///< Empty means cfg.model. Sub-agents run a cheaper one.
+    int max_steps = 0;           ///< 0 means cfg.max_steps.
+    std::string system_extra;    ///< Appended to the system prompt as its own block.
+
+    /// @brief Replaces the identity section rather than adding to it.
+    /// @note A sub-agent is a different persona, not the main one plus a note.
+    std::string identity;
 };
 
+/// @brief The agent loop: ask the model, run what it asks for, repeat.
+///
+/// The whole cycle is a dozen lines. Everything around it — the step ceiling,
+/// compaction, interrupt handling — exists because of a way the plain loop
+/// fails.
+///
+/// @note Holds references to everything. They must all outlive the run; App is
+///       what arranges that.
 class Agent {
   public:
-    /// 注意 ctx 和 session 的关系：ctx.session 必须指向**同一个** session 对象，
-    /// 否则工具看到的历史和循环用的历史会对不上。
+    /// @brief Wire an agent to the pieces it drives.
+    ///
+    /// @param cfg      ⚠️ Held by reference; must outlive the agent.
+    /// @param llm      The model client. FakeLlm in tests.
+    /// @param registry The tools available to this agent.
+    /// @param sandbox  The permission gate the executor consults.
+    /// @param session  The conversation history.
+    /// @param ctx      What tools see at run time.
+    /// @param on_event Progress notifications; empty is fine.
+    /// @param opts     Per-agent overrides.
+    ///
+    /// @warning `ctx.session` must point at the **same** Session passed here.
+    ///          Two instances means the history the tools see is not the one
+    ///          the loop sends, and read's file record never reaches edit's
+    ///          staleness check — which then silently stops working while the
+    ///          transcript looks perfectly normal.
     Agent(const Config& cfg, LlmClient& llm, ToolRegistry& registry, Sandbox& sandbox,
           Session& session, ToolContext& ctx, EventSink on_event = {}, AgentOptions opts = {});
 
-    /// 跑到模型不再要工具为止，返回最终文本。
+    /// @brief Run until the model stops asking for tools.
     ///
-    /// TODO(Stage 1): 骨架 + 步数上限 + 事件 + 中断
-    /// TODO(Stage 4): 循环开头判断是否压缩；注入动态上下文
+    /// @param user_input The task. Empty continues an existing conversation.
+    /// @return The model's final text, or a message saying why it stopped.
     ///
-    /// 注意：流式模式下 on_text 已经吐过文本了，非流式才补发 TextEvent，否则重复输出。
+    /// @warning A TextEvent is emitted **only when not streaming**. The stream
+    ///          callback already delivered the text, and emitting it again
+    ///          prints the whole response twice.
+    ///
+    /// @note The step ceiling is what stops a model that keeps calling tools
+    ///       from looping until the budget is gone.
+    /// @note The interrupt flag is checked at two points: before sending, and
+    ///       after parsing but before running the tools. Both are places where
+    ///       the history is in a consistent state.
+    /// @note Compaction happens before the request, never after a refusal —
+    ///       by then the turn is already lost and the history already saved.
     std::string run(std::string_view user_input = {});
 
+    /// @brief Did the last run end on Ctrl-C?
+    /// @return true when it was interrupted rather than finished.
     bool interrupted() const { return interrupted_; }
 
   private:

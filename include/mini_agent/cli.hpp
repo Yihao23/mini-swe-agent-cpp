@@ -20,11 +20,22 @@ namespace mini {
 
 class App;
 
-/// 事件渲染器。有状态：要记住"当前是不是正处在流式文本中间"，
-/// 否则工具调用会打断到半行文本里。
+/// @brief Renders agent events to the terminal.
+///
+/// @note Stateful on purpose: it has to remember whether it is mid-way through
+///       a streamed line. Without that, a tool call prints itself into the
+///       middle of a half-written sentence.
 class Renderer {
   public:
+    /// @brief Build a renderer.
+    /// @param show_thinking Print the model's reasoning summary.
     explicit Renderer(bool show_thinking = true);
+
+    /// @brief Render one event.
+    /// @param event Any of the five agent events.
+    /// @note A function object rather than a function so the streaming state
+    ///       lives somewhere. EventSink takes it by value, hence the copyable
+    ///       members.
     void operator()(const AgentEvent& event);
 
   private:
@@ -35,18 +46,44 @@ class Renderer {
     bool in_thinking_ = false;
 };
 
-/// 权限确认弹窗：[y] 允许一次 [a] 本会话都允许 [n] 拒绝
+/// @brief Ask the person at the terminal whether a call may proceed.
+///
+/// @param tool    Which tool wants to run.
+/// @param subject What it wants to act on — the path, the command.
+/// @param reason  Why it is being asked, from Decision::reason.
+/// @return What they chose: deny, allow once, or allow for the session.
+///
+/// @note This is the AskFn the sandbox calls. The sandbox knows nothing about
+///       terminals; a web front end would supply a different one, and a test
+///       supplies a lambda.
+/// @note Anything other than y or a is a refusal. Erring toward "no" on a
+///       mistyped key is the cheaper mistake.
 Confirm ask_user(std::string_view tool, std::string_view subject, std::string_view reason);
 
-/// 斜杠命令。返回 true 表示该退出。
-/// 建议：/help /tools /mode /memory /skills /bg /compact /usage /session /clear /quit
+/// @brief Handle one slash command.
+///
+/// @param app  The application, for the state a command inspects or changes.
+/// @param line The whole line the user typed, starting with '/'.
+/// @return true when the session should end.
+///
+/// @note /help /tools /mode /memory /skills /bg /compact /usage /session
+///       /clear /quit. An unknown command prints the list rather than failing.
 bool handle_command(App& app, std::string_view line);
 
+/// @brief The interactive loop: read a line, run a turn, repeat.
+/// @param app The application.
+/// @return Process exit code.
 int repl(App& app);
 
-/// 解析命令行 → 跑一次性任务或进 REPL。
-/// TODO(Stage 7): C++ 没有 argparse，手写一个 30 行的解析循环就够了，
-/// 别引第三方库 —— 这个项目的依赖只该有两个。
+/// @brief Parse the command line, then run one task or enter the REPL.
+///
+/// @param argc From main.
+/// @param argv From main.
+/// @return Process exit code.
+///
+/// @note The parsing is hand-written, about thirty lines. C++ has no argparse,
+///       and this project is allowed exactly two dependencies — a third for
+///       flag parsing is not worth it.
 int cli_main(int argc, char** argv);
 
 }  // namespace mini

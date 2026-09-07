@@ -19,9 +19,19 @@
 
 namespace mini {
 
+/// @brief The JSON type, aliased once so the dependency has one name.
+///
+/// @warning Allowed only at boundaries — llm.cpp, parser.cpp, config.cpp,
+///          mcp.cpp, and a tool's arguments. Business logic passes Message,
+///          ToolResult and Decision. Json holds anything, which reads as
+///          convenience until three months later nobody can tell what fields a
+///          function expects and the compiler cannot help.
 using Json = nlohmann::json;
 
-/// 骨架占位。实现完一个函数就把对应的 todo() 删掉。
+/// @brief Placeholder for a function that is not written yet.
+/// @param what Which one, so the message says what to implement next.
+/// @note Throws rather than returning a default: a silently wrong result is
+///       harder to find than a stack trace naming the function.
 [[noreturn]] inline void todo(std::string_view what) {
     throw std::logic_error("TODO — " + std::string(what));
 }

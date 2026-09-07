@@ -116,16 +116,25 @@ GitHub 的规则不一样（`#pragma` 会被当成符号引用，跨语言链接
 /// @brief Running a subprocess with a timeout — the most systems-level file here (Stage 2).
 ```
 
-### `WARN_IF_UNDOCUMENTED` 为什么是 NO
+### 文档覆盖率现在是强制的
 
-打开它现在会报 264 条「还没写文档」，把 2 条真错误淹掉 —— 信噪比 132:1，
-结果就是没人看。文档覆盖率是渐进目标（`loop` / `app` / `config` / `executor` /
-`llm` / `mcp` / `memory` / `skills` / `subagent` 还没做），不该和「已有文档
-写错了」这种当场可修的问题共用一个开关。想看覆盖率缺口：
+`WARN_IF_UNDOCUMENTED = YES`：`include/` 下每一个公开符号都必须有文档，
+新加一个没写的，`--target docs` 当场失败。
 
-```bash
-(cat Doxyfile; echo WARN_IF_UNDOCUMENTED=YES) | doxygen -
-```
+这个开关一开始是 NO —— 那时有 264 条「还没写文档」会把 2 条真错误淹掉，
+信噪比 132:1，没人会看。补完之后才打开，从此**不可回退**。
+
+具体要求比想象的严：
+
+| | 够不够 |
+|---|---|
+| 只写 `@brief` | ✗ 有返回值就要 `@return` |
+| `@param` 少一个 | ✗ 每个参数都要 |
+| 结构体成员没注释 | ✗ 用 `///<` 写在行尾 |
+
+补完这 315 处的过程本身也验证了一件事：**很多契约我以为写清楚了，其实只写了
+一半。** 比如 `Config` 的 21 个字段，之前只有分组注释（`// --- 模型 ---`），
+没有一个字段说清「改了它会怎样」。
 
 ## 四、变异测试
 

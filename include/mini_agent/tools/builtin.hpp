@@ -32,6 +32,8 @@ struct Config;
 /// @note Records what it read on the session, which is what lets edit and
 ///       write refuse to change a file the model has not seen.
 ///
+///
+/// @return The `read` tool.
 /// 参数：path，可选 offset / limit。path 是目录时列出条目。
 ToolPtr make_read_tool();
 
@@ -70,6 +72,8 @@ ToolPtr make_read_tool();
 /// t.slurp("old.py")                                                        ==> "新的\n"
 /// @endcode
 ///
+///
+/// @return The `write` tool.
 /// 参数：path、content，都必填。
 ToolPtr make_write_tool();
 
@@ -103,6 +107,8 @@ ToolPtr make_write_tool();
 /// t.run(edit, Json{{"path","other.py"},{"old_string","q = 1"},{"new_string","q = 2"}}).is_error ==> true
 /// @endcode
 ///
+///
+/// @return The `edit` tool.
 /// 参数：path、old_string、new_string。
 ToolPtr make_edit_tool();
 
@@ -130,6 +136,8 @@ ToolPtr make_edit_tool();
 /// glob->subject(Json{{"pattern","*.cpp"},{"path","src"}})  ==> "src"
 /// @endcode
 ///
+///
+/// @return The `glob` tool.
 /// 参数：pattern，可选 path（从哪个子目录开始）。
 ToolPtr make_glob_tool();
 
@@ -163,6 +171,8 @@ ToolPtr make_glob_tool();
 /// t.run(grep, Json{{"pattern","[unclosed"}}).is_error      ==> true
 /// @endcode
 ///
+///
+/// @return The `grep` tool.
 /// 参数：pattern，可选 path / glob / ignore_case。
 ToolPtr make_grep_tool();
 
@@ -179,20 +189,61 @@ ToolPtr make_grep_tool();
 /// @note A non-zero exit is an error **with the output kept** — a compiler
 ///       error or a failing test is exactly what the model needs to read next.
 ///
+///
+/// @return The `bash` tool.
 /// 参数：command，可选 timeout_sec。
 ToolPtr make_bash_tool();
 
 // --- Stage 4：agent 自己维护的计划清单，每轮通过 reminder 回灌 ---
+
+/// @brief `todo` — the agent's own plan, rewritten wholesale each time.
+/// @return The `todo` tool.
+/// @note Replace-the-whole-list rather than add/remove items: a model that has
+///       to reason about which entry to mutate gets it wrong, and the list is
+///       short enough that resending it costs nothing.
+/// @note The current list is fed back each turn through turn_context(), not
+///       kept in the system prompt — it changes, and the system prompt may not.
 ToolPtr make_todo_tool();
 
 // --- Stage 5：渐进式披露的两个入口 ---
+
+/// @brief `skill` — load one manual in full, by name.
+/// @return The `skill` tool.
+/// @note The system prompt carries only the index — what exists and when to
+///       use it. Ten skills inlined in full would put thousands of tokens into
+///       every turn's fixed cost, most of them irrelevant to the task at hand.
 ToolPtr make_skill_tool();
+
+/// @brief `memory` — search, load, write and delete long-term notes.
+/// @return The `memory` tool.
+/// @note Same shape as skills: an index in the system prompt, bodies on
+///       demand. What differs is who writes them — the agent writes memory,
+///       a human writes skills.
 ToolPtr make_memory_tool();
 
 // --- Stage 6 ---
-ToolPtr make_task_tool();          // 派一个子 agent
-ToolPtr make_task_graph_tool();    // 派一张带依赖的任务图
-ToolPtr make_bash_output_tool();   // 读后台任务输出
+
+/// @brief `task` — hand one job to a sub-agent and receive its conclusion.
+/// @return The `task` tool.
+/// @note The saving is context, not time: twenty turns of investigation come
+///       back as one paragraph instead of twenty turns of transcript.
+ToolPtr make_task_tool();
+
+/// @brief `task_graph` — hand over a dependency graph of jobs at once.
+/// @return The `task_graph` tool.
+/// @note Runs on Scheduler, which knows nothing about LLMs — which is what
+///       lets its topological ordering and concurrency be tested in half a
+///       second without spending a token.
+ToolPtr make_task_graph_tool();
+
+/// @brief `bash_output` — read what a background task has produced since last time.
+/// @return The `bash_output` tool.
+/// @note Returns only new output. Returning everything each turn would refill
+///       the context with lines the model has already read.
+ToolPtr make_bash_output_tool();
+
+/// @brief `kill_task` — stop a background task.
+/// @return The `kill_task` tool.
 ToolPtr make_kill_task_tool();
 
 /// @brief The builtin set for one agent, assembled from the config switches.

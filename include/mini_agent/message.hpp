@@ -33,7 +33,7 @@ enum class Role { User, Assistant };
 
 /// @brief Plain text, from either side of the conversation.
 struct TextBlock {
-    std::string text;
+    std::string text;   ///< The words themselves.
 };
 
 /// @brief The model's reasoning, with the signature that authenticates it.
@@ -42,8 +42,8 @@ struct TextBlock {
 ///          it on the next turn and rejects the request if it was altered —
 ///          which is why compaction and streaming both take care to preserve it.
 struct ThinkingBlock {
-    std::string thinking;
-    std::string signature;  // ⚠️ 必须原样带回，API 会校验；改了就报错
+    std::string thinking;   ///< The reasoning summary, for display.
+    std::string signature;  ///< ⚠️ 必须原样带回，API 会校验；改了就报错
 };
 
 /// @brief Reasoning the API withheld, kept as an opaque blob.
@@ -51,7 +51,7 @@ struct ThinkingBlock {
 /// @note Nothing here is readable, but it still has to be carried through the
 ///       history unchanged — dropping it breaks the chain the next turn checks.
 struct RedactedThinkingBlock {
-    std::string data;
+    std::string data;   ///< Opaque. Unreadable, but must survive the round trip.
 };
 
 /// @brief The model asking for a tool to be run.
@@ -63,9 +63,9 @@ struct RedactedThinkingBlock {
 /// @note `input` is Json because tool schemas are arbitrary. This is a boundary,
 ///       which is where json.hpp says Json is allowed to appear.
 struct ToolUseBlock {
-    std::string id;    // toolu_...，回传 tool_result 时要对上
-    std::string name;
-    Json input;        // 工具参数是任意 schema，这里 Json 是合理的（边界）
+    std::string id;    ///< toolu_...，回传 tool_result 时要对上
+    std::string name;  ///< Which tool.
+    Json input;        ///< 工具参数是任意 schema，这里 Json 是合理的（边界）
 };
 
 /// @brief What a tool produced, on its way back to the model.
@@ -74,9 +74,9 @@ struct ToolUseBlock {
 ///       is reported as a result the model can read and work around, never as
 ///       an exception that ends the run.
 struct ToolResultBlock {
-    std::string tool_use_id;
-    std::string content;
-    bool is_error = false;
+    std::string tool_use_id;   ///< Must match a ToolUseBlock, or the request fails.
+    std::string content;       ///< What the tool produced; never empty.
+    bool is_error = false;     ///< Serialised only when true — see to_json.
 };
 
 /// @brief One piece of a message. A closed set defined by the API.
@@ -101,13 +101,14 @@ using ContentBlock =
 /// //                                {"type":"tool_use","id":"toolu_1",...}]}
 /// @endcode
 struct Message {
-    Role role{};
-    std::vector<ContentBlock> content;
+    Role role{};                       ///< Who it came from, as the API models it.
+    std::vector<ContentBlock> content; ///< One turn's blocks, in order.
 };
 
 // --- 序列化（在 src/message.cpp 实现）---------------------------------------
 
 /// @brief Serialise one block into its wire form.
+/// @param block The block.
 /// @return An object whose `type` field names the alternative.
 /// @code
 /// to_json(ContentBlock{TextBlock{"hi"}});   // {"type":"text","text":"hi"}
@@ -115,13 +116,18 @@ struct Message {
 Json to_json(const ContentBlock& block);
 
 /// @brief Serialise one message: `{"role": ..., "content": [...]}`.
+/// @param msg The message.
+/// @return The wire object.
 Json to_json(const Message& msg);
 
 /// @brief Serialise a whole history into the `messages` array of a request.
+/// @param msgs The history, oldest first.
+/// @return A JSON array, one entry per message.
 Json to_json(const std::vector<Message>& msgs);
 
 /// @brief Parse one block back from its wire form.
 ///
+/// @param j The wire object.
 /// @return nullopt for a `type` this build does not know.
 ///
 /// @note Discarding beats guessing. The API will add block types, and
@@ -133,14 +139,19 @@ Json to_json(const std::vector<Message>& msgs);
 std::optional<ContentBlock> block_from_json(const Json& j);
 
 /// @brief Parse one message; unknown blocks inside it are dropped.
+/// @param j The wire object.
+/// @return The message, with whatever blocks this build understands.
 Message message_from_json(const Json& j);
 
 /// @brief Parse a history array, e.g. when resuming a session from disk.
+/// @param j A JSON array of messages.
+/// @return The history; a non-array yields an empty vector rather than throwing.
 std::vector<Message> messages_from_json(const Json& j);
 
 // --- 小工具 -----------------------------------------------------------------
 /// @brief Concatenate every TextBlock in a message.
 ///
+/// @param msg The message.
 /// @return Empty when the message holds no text — routine, not exceptional: an
 ///         assistant turn that only calls tools has none, and neither does a
 ///         tool_result message.
@@ -152,6 +163,9 @@ std::string text_of(const Message& msg);
 
 /// @brief Does this message carry any tool_result block?
 ///
+/// @param msg The message.
+/// @return true when at least one block is a ToolResultBlock.
+///
 /// @note Separates a real user turn from a tool result, since both are
 ///       Role::User. Session::safe_split relies on this: cutting the history at
 ///       a tool_result orphans its tool_use and the next request fails.
@@ -160,5 +174,7 @@ std::string text_of(const Message& msg);
 bool has_tool_result(const Message& msg);
 
 /// @brief The wire spelling of a role: `"user"` or `"assistant"`.
+/// @param role The role.
+/// @return The exact string the API expects.
 std::string_view to_string(Role role);
 }  // namespace mini

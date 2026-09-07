@@ -42,9 +42,9 @@ class ToolRegistry;
 /// @note `metadata` is for the UI (line counts, match counts) and never reaches
 ///       the API.
 struct ToolResult {
-    std::string content;
-    bool is_error = false;   // ← 是值，不是异常。见 BUILD-GUIDE Stage 0
-    Json metadata = Json::object();
+    std::string content;         ///< What the model reads. Never empty — the API rejects that.
+    bool is_error = false;       ///< A value, not an exception. See BUILD-GUIDE Stage 0.
+    Json metadata = Json::object();   ///< For the UI only; never reaches the API.
 
     /// @brief Build a failed result.
     ///
@@ -87,16 +87,25 @@ using SpawnFn = std::function<std::string(std::string_view, std::string_view)>;
 ///
 /// 工具运行时能摸到的一切。**全是非拥有指针**，不负责任何生命周期。
 struct ToolContext {
-    const Config* cfg = nullptr;      // 契约：非空
-    Sandbox* sandbox = nullptr;       // 契约：非空
+    const Config* cfg = nullptr;      ///< Contract: never null.
+    Sandbox* sandbox = nullptr;       ///< Contract: never null.
+
+    /// @brief The conversation, for read's file record and edit's check.
+    /// @warning Must be the **same** Session the loop uses. Two instances and
+    ///          the read-before-edit rule silently stops working.
     Session* session = nullptr;
-    Memory* memory = nullptr;         // Stage 5
-    SkillRegistry* skills = nullptr;  // Stage 5
-    BackgroundManager* background = nullptr;  // Stage 6
-    ToolRegistry* registry = nullptr;
-    SpawnFn spawn;                    // Stage 6；空 = 不允许派子 agent
-    Json todos = Json::array();
-    int depth = 0;                    // agent 层级，用来禁止无限嵌套
+
+    Memory* memory = nullptr;                 ///< Stage 5; null until then.
+    SkillRegistry* skills = nullptr;          ///< Stage 5; null until then.
+    BackgroundManager* background = nullptr;  ///< Stage 6; null until then.
+    ToolRegistry* registry = nullptr;         ///< For tools that need the tool list.
+
+    /// @brief Launches a sub-agent (Stage 6).
+    /// @note Empty in a sub-agent's own context — that is what stops nesting.
+    SpawnFn spawn;
+
+    Json todos = Json::array();       ///< The current plan; fed back via turn_context().
+    int depth = 0;                    ///< Nesting level, checked against kMaxAgentDepth.
 };
 
 // ── 两个布尔标记不是一回事（最容易搞错的地方）──────────────────────────────
@@ -116,21 +125,25 @@ class Tool {
     virtual ~Tool() = default;
 
     /// @brief Tool name, as the model will call it.
+    /// @return A stable name; also what permission rules match against.
     virtual std::string_view name() const = 0;
 
     /// @brief When to use this tool.
     /// @note The only place the model learns that. Vague wording here shows up
     ///       as the model reaching for read where grep was meant.
+    /// @return Prose the model reads before choosing this tool.
     virtual std::string_view description() const = 0;   // 唯一告诉模型"何时该用"的地方
 
     /// @brief JSON Schema for the arguments.
     /// @note Listing a parameter in `required` saves a round trip — without it
     ///       the model may omit it and need a second turn to supply it.
+    /// @return A JSON Schema object: type, properties, required.
     virtual Json input_schema() const = 0;
 
     /// @brief Does this tool leave local files alone?
     /// @note Only decides whether the executor may run it concurrently, and
     ///       which way a permission mode defaults. Not an exemption.
+    /// @return true when the executor may run it beside other tools.
     virtual bool read_only() const { return false; }
 
     /// @brief Does this call need authorisation?
@@ -139,6 +152,7 @@ class Tool {
     ///       pass the gate. Defaults to true so a new tool errs safe.
     /// @note Even an exempt tool is still matched against deny rules —
     ///       "no need to ask" is not "unconstrained".
+    /// @return true when Sandbox::authorize must ask before running it.
     virtual bool requires_permission() const { return true; }
 
     /// @brief The one string the sandbox matches its rules against.
@@ -193,6 +207,10 @@ class Tool {
     Json schema() const;
 };
 
+/// @brief How tools are held.
+/// @note shared_ptr, not unique_ptr: a Stage 6 sub-agent gets a subset of the
+///       main registry, and both point at the same instances. That is genuine
+///       shared ownership, not laziness.
 using ToolPtr = std::shared_ptr<Tool>;
 
 /// @brief The tools available to one agent.
@@ -224,8 +242,8 @@ class ToolRegistry {
     Tool* get(std::string_view name) const;      // 找不到返回 nullptr
 
     /// @brief Every registered name, in registration order.
-    /// @note Used to tell the model what it could have called when it names
-    ///       something that does not exist.
+    /// @return The names; used to tell the model what it could have called
+    ///         when it names something that does not exist.
     std::vector<std::string> names() const;
 
     /// @brief Non-owning pointers to every tool.
@@ -235,6 +253,7 @@ class ToolRegistry {
     ///       elements and there is no such thing as a pointer to a reference.
     ///       Values would not work either: callers need to invoke run(), which
     ///       is non-const.
+    /// @return Pointers into the registry; valid while it is.
     std::vector<Tool*> all() const;
 
     /// @brief The `tools` array for a request.
@@ -275,10 +294,14 @@ class ToolRegistry {
     ///       the subset point at the same instances and neither owns them
     ///       outright.
     ///
+    /// @param names Which tools to keep; unknown names are ignored.
+    /// @return A registry holding only those, sharing the same instances.
+    ///
     /// 挑出一部分组成新注册表 —— Stage 6 给子 agent 收窄权限用。
     ToolRegistry subset(const std::vector<std::string>& names) const;
 
     /// @brief How many tools are registered.
+    /// @return The count.
     std::size_t size() const;
 
   private:
