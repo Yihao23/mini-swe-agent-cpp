@@ -104,8 +104,65 @@ ToolPtr make_write_tool();
 /// 参数：path、old_string、new_string。
 ToolPtr make_edit_tool();
 
-ToolPtr make_glob_tool();   // TODO(Stage 2): 按修改时间倒序
-ToolPtr make_grep_tool();   // TODO(Stage 2): std::regex 够用，跳过二进制/大文件
+/// @brief `glob` — find files by name, newest first.
+///
+/// @note Sorted by modification time descending, not alphabetically. A model
+///       asking "which .cpp files are there" almost always wants the ones
+///       someone touched recently; alphabetical order leads with app.cpp for no
+///       reason anyone cares about.
+/// @note `*` crosses `/`, so `*.cpp` and `**/*.cpp` behave the same. A model
+///       writing the former means "every .cpp", not "the top-level ones" — the
+///       same trade-off Rule::matches makes.
+/// @note Never opens a file. That is why it answers in milliseconds where grep
+///       has to read everything.
+///
+/// @code{.test}
+/// @setup DocTools t;
+/// @setup const auto glob = make_glob_tool();
+/// @setup t.seed("src/a.cpp", "x\n");
+/// @setup t.seed("build/gen.cpp", "x\n");
+/// @setup const auto found = t.run(glob, Json{{"pattern","*.cpp"}}).content;
+/// (found.find("src/a.cpp") != std::string::npos)     ==> true
+/// (found.find("build/") != std::string::npos)        ==> false
+/// // 审查对象是搜索起点，不是模式 —— 规则约束的是「能看哪个目录」
+/// glob->subject(Json{{"pattern","*.cpp"},{"path","src"}})  ==> "src"
+/// @endcode
+///
+/// 参数：pattern，可选 path（从哪个子目录开始）。
+ToolPtr make_glob_tool();
+
+/// @brief `grep` — find files by content, as `path:line: text`.
+///
+/// @warning Binary files are skipped, detected by a NUL byte in the first 8 KB.
+///          Without that one `.o` under build/ emits thousands of lines of
+///          mojibake and swallows the turn's context — and the model could not
+///          use the result anyway.
+///
+/// @note `build/`, `.git/`, `node_modules/` and friends are pruned during the
+///       walk, not filtered afterwards; descending into `.git` first would
+///       already cost tens of thousands of entries.
+/// @note The line number is the point of the output format: it lets the model
+///       go straight to read with an offset instead of pulling a whole file.
+/// @note Long lines are clipped and huge files skipped. One minified `.js` line
+///       is a megabyte.
+/// @note A malformed regex comes back as an error naming the pattern. It is the
+///       model that wrote it, and a bare what() gives it nothing to fix.
+///
+/// @code{.test}
+/// @setup DocTools t;
+/// @setup const auto grep = make_grep_tool();
+/// @setup t.seed("a.py", "import os\nx = compute()\n");
+/// @setup t.seed("blob.o", std::string("compute\0\0garbage", 15));
+/// @setup const auto hits = t.run(grep, Json{{"pattern","compute"}});
+/// (hits.content.find("a.py:2:") != std::string::npos)      ==> true
+/// (hits.content.find("blob.o") != std::string::npos)       ==> false
+/// hits.metadata.at("matches")                              ==> 1
+/// // 坏正则给一句能改的话，不抛
+/// t.run(grep, Json{{"pattern","[unclosed"}}).is_error      ==> true
+/// @endcode
+///
+/// 参数：pattern，可选 path / glob / ignore_case。
+ToolPtr make_grep_tool();
 
 /// @brief `bash` — run one shell command in the workdir.
 ///
@@ -139,8 +196,8 @@ ToolPtr make_kill_task_tool();
 /// @brief The builtin set for one agent, assembled from the config switches.
 ///
 /// @param cfg Read for its enable_* flags.
-/// @return read, write, edit and bash today; the Stage 4/5/6 tools join as
-///         they land.
+/// @return read, write, edit, glob, grep and bash today; the Stage 4/5/6 tools
+///         join as they land.
 ///
 /// @warning A factory that is still todo() throws the moment it is called, and
 ///          the enable_* flags default to true — so a tool only goes in here

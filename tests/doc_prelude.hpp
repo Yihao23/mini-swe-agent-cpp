@@ -94,8 +94,14 @@ struct DocTools {
     }
 
     /// @brief Put a file there without going through a tool.
+    ///
+    /// @note Creates parent directories. An ofstream on a path whose directory
+    ///       does not exist fails silently, and the example then reads as if
+    ///       the tool under test had lost the file.
     void seed(const std::string& rel, const std::string& body) const {
-        std::ofstream(cfg.workdir / rel, std::ios::binary) << body;
+        const auto p = cfg.workdir / rel;
+        std::filesystem::create_directories(p.parent_path());
+        std::ofstream(p, std::ios::binary) << body;
     }
 };
 

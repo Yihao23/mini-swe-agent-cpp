@@ -27,6 +27,18 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 BUILD = ROOT / "build"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
+SUBJ_OLD = '\n'.join([
+ '    /// 审查对象是搜索**起点**，不是模式 —— 权限规则约束的是"能看哪个目录"。',
+ '    std::string subject(const Json& args) const override {',
+ '        return str_arg(args, "path").value_or(std::string{"."});',
+ '    }',
+])
+SUBJ_NEW = '\n'.join([
+ '    std::string subject(const Json& args) const override {',
+ '        return str_arg(args, "path").value_or(std::string{});',
+ '    }',
+])
+
 # 每项: name, file, edits[(old, new)], binaries, expect[用例名子串], note
 # 可选 known_gap: 已知抓不到，附上为什么。留在清单里是有意的 —— 把没覆盖的地方
 # 记下来，比从清单里删掉假装不存在有用。
@@ -184,6 +196,63 @@ MUTANTS = [
         binaries=["test_docs"],
         expect=["builtin_hpp"],
         note="只替换第一处，模型以为全改了",
+    ),
+    dict(
+        name="glob 按字母序而不是修改时间倒序",
+        file="src/tools/builtin.cpp",
+        edits=[("        std::ranges::sort(hits, std::ranges::greater{}, &decltype(hits)::value_type::first);",
+                "        std::ranges::sort(hits, {}, &decltype(hits)::value_type::second);")],
+        binaries=["test_search_tools"],
+        expect=["glob_sorts_newest_first"],
+        note="模型问「有哪些 cpp」时要的几乎总是最近动过的，字母序把 app.cpp 排前面",
+    ),
+    dict(
+        name="遍历不跳过 build/ .git/ 等目录",
+        file="src/tools/builtin.cpp",
+        edits=[("            if (is_skipped_dir(p.filename().string())) it.disable_recursion_pending();",
+                "            // MUTANT")],
+        binaries=["test_search_tools"],
+        expect=["glob_skips_build_and_vcs_directories", "grep_skips_build_and_vcs_directories"],
+        note="build/ 几千个中间文件 + .git/ 成千上万个 object 会把真正的结果淹掉",
+    ),
+    dict(
+        name="grep 不跳过二进制文件",
+        file="src/tools/builtin.cpp",
+        edits=[("            if (looks_binary(in)) return;", "            // MUTANT")],
+        binaries=["test_search_tools"],
+        expect=["grep_skips_binary_files"],
+        note="一个 .o 就能吐出几千行乱码，撑爆整轮上下文，而且模型也用不上",
+    ),
+    dict(
+        name="grep 不截断超长行",
+        file="src/tools/builtin.cpp",
+        edits=[("""                if (line.size() > kMaxLineChars)
+                    line = line.substr(0, kMaxLineChars) + " …(行过长已截断)";""",
+                "                // MUTANT")],
+        binaries=["test_search_tools"],
+        expect=["grep_clips_very_long_lines"],
+        note="一行 minified js 就是一兆",
+    ),
+    dict(
+        name="grep 坏正则直接抛而不是返回错误",
+        file="src/tools/builtin.cpp",
+        edits=[("""        } catch (const std::regex_error& e) {
+            return ToolResult::error("正则有语法错误: " + *pattern + " —— " + e.what());
+        }""",
+                """        } catch (const std::regex_error&) {
+            throw;
+        }""")],
+        binaries=["test_search_tools"],
+        expect=["grep_reports_a_bad_regex_instead_of_throwing"],
+        note="正则是模型写的，抛出去它只看到一句 what()，改不了",
+    ),
+    dict(
+        name="glob/grep 的 subject 默认返回空串",
+        file="src/tools/builtin.cpp",
+        edits=[(SUBJ_OLD, SUBJ_NEW)],
+        binaries=["test_search_tools"],
+        expect=["subject_is_the_search_root"],
+        note="空串在沙箱里是「路径为空」，规则匹配不到任何东西",
     ),
     dict(
         name="bash 超时不标记 is_error",

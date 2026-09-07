@@ -50,6 +50,7 @@ mini-swe-agent-cpp/
     ├── test_process.cpp    子进程超时、进程组、输出截断
     ├── test_bash.cpp       bash 工具：四种失败方式怎么塌成一个 is_error
     ├── test_file_tools.cpp write 工具与三个文件工具的参数加固
+    ├── test_search_tools.cpp glob 与 grep：找得到，且不被 build/ 淹没
     ├── test_docs.cpp       生成物，勿手改
     ├── doc_prelude.hpp     给文档示例用的脚手架
     └── mock_mcp_server.py  假 MCP server，Stage 7 验证握手用
@@ -95,7 +96,8 @@ Stage 4+ ░░░░░░░░░░░░░░░░░░░░
 | `test_process` | 14/14 |
 | `test_bash` | 12/12 |
 | `test_file_tools` | 13/13 |
-| `test_docs` | 17 块 / 99 条（从头文件生成） |
+| `test_search_tools` | 19/19 |
+| `test_docs` | 19 块 / 106 条（从头文件生成） |
 | `test_smoke` | **15/15** |
 
 `-Wall -Wextra -Wpedantic` 下零警告。

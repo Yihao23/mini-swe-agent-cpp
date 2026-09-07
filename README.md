@@ -62,6 +62,7 @@ mini-swe-agent-cpp/
     ├── test_process.cpp    Subprocess timeout, process groups, output truncation
     ├── test_bash.cpp       How four kinds of failure collapse into one is_error
     ├── test_file_tools.cpp The write tool, and typed argument reads
+    ├── test_search_tools.cpp glob and grep — found, and not drowned by build/
     ├── test_docs.cpp       Generated — do not edit
     ├── doc_prelude.hpp     Scaffolding the documented examples share
     └── mock_mcp_server.py  A fake MCP server for the Stage 7 handshake
@@ -109,7 +110,8 @@ Stage 4+ ░░░░░░░░░░░░░░░░░░░░
 | `test_process` | 14/14 |
 | `test_bash` | 12/12 |
 | `test_file_tools` | 13/13 |
-| `test_docs` | 17 blocks / 99 assertions, generated from the headers |
+| `test_search_tools` | 19/19 |
+| `test_docs` | 19 blocks / 106 assertions, generated from the headers |
 | `test_smoke` | **15/15** |
 
 Builds clean under `-Wall -Wextra -Wpedantic`.

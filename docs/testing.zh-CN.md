@@ -99,7 +99,7 @@ CHECK(!sb.resolve_path("/work-other/x.py").second.allowed());
 
 这个叫**反例**。没有反例的断言是装饰品。
 
-### 这个项目里抓到过的六个假测试
+### 这个项目里抓到过的七个假测试
 
 | 假在哪 | 怎么修的 |
 |---|---|
@@ -109,6 +109,7 @@ CHECK(!sb.resolve_path("/work-other/x.py").second.allowed());
 | `yes` 永不结束 | 正确实现也会超时 → 换成 `yes \| head -100000`（会自己退出） |
 | `dangerous_command_denied` | ReadOnly 模式先拒绝了，危险层从没被问到 |
 | `bash->subject()` | 只有一个字符串参数，默认实现碰巧也对 → 加一个字母序更靠前的参数 |
+| glob 按时间排序 | 文件名叫 `old.cpp` / `new.cpp`，字母序也把 new 排前面 → 换成 `a_newest` / `z_oldest` |
 
 共同点都是一句话：**输入没能让两种实现分开。** 读代码一个都看不出来，因为断言
 本身都写得对。

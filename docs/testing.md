@@ -108,7 +108,7 @@ CHECK(!sb.resolve_path("/work-other/x.py").second.allowed());
 
 That is a **counter-example**. An assertion without one is decoration.
 
-### The six vacuous tests found in this project
+### The seven vacuous tests found in this project
 
 | What was wrong | The fix |
 |---|---|
@@ -118,8 +118,9 @@ That is a **counter-example**. An assertion without one is decoration.
 | `yes` never ends | A correct implementation times out too → `yes \| head -100000`, which exits |
 | `dangerous_command_denied` | Read-only mode denies first; the danger layer is never consulted |
 | `bash->subject()` | One string parameter, so the base-class default happens to be right → added a key sorting ahead of it |
+| glob's mtime order | Files named `old.cpp` / `new.cpp` — alphabetical puts `new` first too → renamed to `a_newest` / `z_oldest` |
 
-One sentence covers all six: **the input failed to separate the two
+One sentence covers all seven: **the input failed to separate the two
 implementations.** None of them is visible from reading the code, because every
 assertion is written correctly.
 

@@ -235,4 +235,31 @@ TEST(doc_include_mini_agent_tools_builtin_hpp_L85) {
     CHECK_MSG((t.run(edit, Json{{"path","other.py"},{"old_string","q = 1"},{"new_string","q = 2"}}).is_error) == (true), "include/mini_agent/tools/builtin.hpp:101 的示例失效了");
 }
 
+/// From include/mini_agent/tools/builtin.hpp:119
+TEST(doc_include_mini_agent_tools_builtin_hpp_L119) {
+    DocTools t;
+    const auto glob = make_glob_tool();
+    t.seed("src/a.cpp", "x\n");
+    t.seed("build/gen.cpp", "x\n");
+    const auto found = t.run(glob, Json{{"pattern","*.cpp"}}).content;
+    CHECK_MSG(((found.find("src/a.cpp") != std::string::npos)) == (true), "include/mini_agent/tools/builtin.hpp:125 的示例失效了");
+    CHECK_MSG(((found.find("build/") != std::string::npos)) == (false), "include/mini_agent/tools/builtin.hpp:126 的示例失效了");
+    // 审查对象是搜索起点，不是模式 —— 规则约束的是「能看哪个目录」
+    CHECK_MSG((glob->subject(Json{{"pattern","*.cpp"},{"path","src"}})) == ("src"), "include/mini_agent/tools/builtin.hpp:128 的示例失效了");
+}
+
+/// From include/mini_agent/tools/builtin.hpp:151
+TEST(doc_include_mini_agent_tools_builtin_hpp_L151) {
+    DocTools t;
+    const auto grep = make_grep_tool();
+    t.seed("a.py", "import os\nx = compute()\n");
+    t.seed("blob.o", std::string("compute\0\0garbage", 15));
+    const auto hits = t.run(grep, Json{{"pattern","compute"}});
+    CHECK_MSG(((hits.content.find("a.py:2:") != std::string::npos)) == (true), "include/mini_agent/tools/builtin.hpp:157 的示例失效了");
+    CHECK_MSG(((hits.content.find("blob.o") != std::string::npos)) == (false), "include/mini_agent/tools/builtin.hpp:158 的示例失效了");
+    CHECK_MSG((hits.metadata.at("matches")) == (1), "include/mini_agent/tools/builtin.hpp:159 的示例失效了");
+    // 坏正则给一句能改的话，不抛
+    CHECK_MSG((t.run(grep, Json{{"pattern","[unclosed"}}).is_error) == (true), "include/mini_agent/tools/builtin.hpp:161 的示例失效了");
+}
+
 int main() { return mt::run_all(); }

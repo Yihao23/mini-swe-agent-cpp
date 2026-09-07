@@ -10,11 +10,16 @@
 
 #include "mini_agent/tools/builtin.hpp"
 
+#include <fnmatch.h>
+
 #include <algorithm>
+#include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <optional>
+#include <regex>
 #include <system_error>
 
 #include "mini_agent/config.hpp"
@@ -63,6 +68,53 @@ int int_arg(const Json& args, const char* key, int fallback) {
 /// @note A directory path lists its entries rather than failing. The model
 ///       often cannot tell which it has; failing would cost a round trip to
 ///       learn something the call already knew.
+// ── glob / grep 共用 ───────────────────────────────────────────────────────
+
+/// 遍历时永远跳过的目录名。
+///
+/// ⚠️ 不跳的话结果会被淹没：`build/` 下面几千个 .o 和 CMake 的中间文件，
+///    `.git/` 下面成千上万个 object。模型要找的那三个源文件会排在几百行之后，
+///    而且中间那些内容会把整轮上下文撑爆。
+const char* const kSkipDirs[] = {
+    ".git", ".hg", ".svn", "build", "node_modules", "__pycache__",
+    ".venv", "venv", "target", "dist", ".mini-agent", ".cache",
+};
+
+bool is_skipped_dir(const std::string& name) {
+    return std::ranges::find(kSkipDirs, name) != std::ranges::end(kSkipDirs);
+}
+
+/// glob 模式匹配。不加 FNM_PATHNAME，所以 `*` 会跨 `/`。
+///
+/// @note 副作用是 `*.cpp` 和 `**/*.cpp` 在这里等价 —— 都能匹配 src/a/b.cpp。
+///       对 agent 来说这是想要的：模型写 `*.cpp` 时几乎总是指"所有 cpp 文件"，
+///       而不是"仅顶层的"。和 Sandbox::Rule::matches 的取舍一致。
+bool glob_match(const std::string& pattern, const std::string& rel) {
+    return ::fnmatch(pattern.c_str(), rel.c_str(), 0) == 0;
+}
+
+/// 从 root 往下走，对每个**文件**调 fn(相对路径, 绝对路径)。
+///
+/// @note 用 recursive_directory_iterator 的 disable_recursion_pending() 来剪枝，
+///       而不是进去之后再过滤 —— 后者仍然会把 .git 下面几万个条目全遍历一遍。
+template <class F>
+void walk(const fs::path& root, const fs::path& rel_base, F&& fn) {
+    std::error_code ec;
+    fs::recursive_directory_iterator it(
+        root, fs::directory_options::skip_permission_denied, ec);
+    if (ec) return;
+    for (; it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        if (ec) break;
+        const auto& p = it->path();
+        if (it->is_directory(ec)) {
+            if (is_skipped_dir(p.filename().string())) it.disable_recursion_pending();
+            continue;
+        }
+        if (!it->is_regular_file(ec)) continue;   // 跳过符号链接、fifo、设备
+        fn(p.lexically_relative(rel_base).generic_string(), p);
+    }
+}
+
 class ReadTool final : public Tool {
   public:
     std::string_view name() const override { return "read"; }
@@ -346,6 +398,203 @@ class EditTool final : public Tool {
     }
 };
 
+/// @brief Finds files by name, newest first.
+///
+/// @note Sorted by modification time descending, not alphabetically. A model
+///       asking "which .cpp files are there" almost always wants the ones
+///       someone touched recently; alphabetical order puts app.cpp first for
+///       no reason anyone cares about.
+/// @note Never opens a file — it only reads directory entries, which is why it
+///       can answer in milliseconds where grep has to read everything.
+class GlobTool final : public Tool {
+  public:
+    std::string_view name() const override { return "glob"; }
+
+    std::string_view description() const override {
+        return "按文件名模式查找文件，结果按修改时间从新到旧排序。"
+               "模式如 `**/*.cpp`、`test_*.py`、`src/**/*.hpp`。"
+               "找文件内容用 grep，读文件用 read。";
+    }
+
+    Json input_schema() const override {
+        return Json{
+            {"type", "object"},
+            {"properties",
+             {{"pattern", {{"type", "string"}, {"description", "glob 模式，如 **/*.cpp"}}},
+              {"path", {{"type", "string"}, {"description", "从哪个子目录开始找，默认工作目录"}}}}},
+            {"required", Json::array({"pattern"})},
+        };
+    }
+
+    bool read_only() const override { return true; }
+    bool requires_permission() const override { return false; }   // 边界仍由 sandbox 管
+
+    /// 审查对象是搜索**起点**，不是模式 —— 权限规则约束的是"能看哪个目录"。
+    std::string subject(const Json& args) const override {
+        return str_arg(args, "path").value_or(std::string{"."});
+    }
+
+    ToolResult run(const Json& args, ToolContext& ctx) override {
+        const auto pattern = str_arg(args, "pattern");
+        if (!pattern || pattern->empty())
+            return ToolResult::error("缺少 pattern 参数（必须是字符串）");
+
+        const auto [root, decision] = ctx.sandbox->resolve_path(
+            str_arg(args, "path").value_or(std::string{"."}));
+        if (!decision.allowed()) return ToolResult::error(decision.reason);
+
+        std::error_code ec;
+        if (!fs::is_directory(root, ec)) return ToolResult::error("不是目录: " + root.string());
+
+        std::vector<std::pair<fs::file_time_type, std::string>> hits;
+        walk(root, ctx.cfg->workdir, [&](const std::string& rel, const fs::path& abs) {
+            if (!glob_match(*pattern, rel) && !glob_match(*pattern, fs::path(rel).filename().string()))
+                return;
+            std::error_code e;
+            hits.emplace_back(fs::last_write_time(abs, e), rel);
+        });
+
+        if (hits.empty()) return ToolResult{.content = "没有匹配 " + *pattern + " 的文件"};
+
+        std::ranges::sort(hits, std::ranges::greater{}, &decltype(hits)::value_type::first);
+        const bool truncated = hits.size() > kMaxResults;
+        if (truncated) hits.resize(kMaxResults);
+
+        std::string out;
+        for (const auto& [_, rel] : hits) out += rel + "\n";
+        if (truncated)
+            out += std::format("... (只显示最近修改的 {} 个，用更精确的模式缩小范围)\n",
+                               kMaxResults);
+        return ToolResult{.content = std::move(out),
+                          .metadata = {{"count", hits.size()}, {"truncated", truncated}}};
+    }
+
+  private:
+    static constexpr std::size_t kMaxResults = 200;
+};
+
+/// @brief Finds files by content.
+///
+/// @warning Binary files are skipped, detected by a NUL byte in the first 8 KB.
+///          Without that a single `.o` under build/ can emit thousands of lines
+///          of mojibake and swallow the whole turn's context — and the model
+///          cannot do anything with the result either way.
+///
+/// @note Output is `path:line: text`, the shape every developer tool uses. The
+///       line number is what lets the model go straight to read with an offset
+///       instead of pulling the whole file.
+/// @note Long lines are clipped. One minified .js line is a megabyte.
+class GrepTool final : public Tool {
+  public:
+    std::string_view name() const override { return "grep"; }
+
+    std::string_view description() const override {
+        return "在文件内容里搜正则，返回 路径:行号: 内容。"
+               "可用 glob 参数限定文件（如 `**/*.cpp`）。"
+               "按文件名找文件用 glob，读整个文件用 read。";
+    }
+
+    Json input_schema() const override {
+        return Json{
+            {"type", "object"},
+            {"properties",
+             {{"pattern", {{"type", "string"}, {"description", "ECMAScript 正则"}}},
+              {"path", {{"type", "string"}, {"description", "从哪个子目录开始搜，默认工作目录"}}},
+              {"glob", {{"type", "string"}, {"description", "只搜匹配这个模式的文件"}}},
+              {"ignore_case", {{"type", "boolean"}, {"description", "忽略大小写"}}}}},
+            {"required", Json::array({"pattern"})},
+        };
+    }
+
+    bool read_only() const override { return true; }
+    bool requires_permission() const override { return false; }
+
+    std::string subject(const Json& args) const override {
+        return str_arg(args, "path").value_or(std::string{"."});
+    }
+
+    ToolResult run(const Json& args, ToolContext& ctx) override {
+        const auto pattern = str_arg(args, "pattern");
+        if (!pattern || pattern->empty())
+            return ToolResult::error("缺少 pattern 参数（必须是字符串）");
+
+        // ⚠️ 正则是模型给的，写坏了会抛。抛出去模型只能看到一句 what()，
+        //    这里翻译成它能改的话。
+        auto flags = std::regex::ECMAScript | std::regex::optimize;
+        if (args.is_object() && args.contains("ignore_case") && args["ignore_case"] == true)
+            flags |= std::regex::icase;
+        std::regex re;
+        try {
+            re.assign(*pattern, flags);
+        } catch (const std::regex_error& e) {
+            return ToolResult::error("正则有语法错误: " + *pattern + " —— " + e.what());
+        }
+
+        const auto [root, decision] = ctx.sandbox->resolve_path(
+            str_arg(args, "path").value_or(std::string{"."}));
+        if (!decision.allowed()) return ToolResult::error(decision.reason);
+
+        std::error_code ec;
+        if (!fs::is_directory(root, ec)) return ToolResult::error("不是目录: " + root.string());
+
+        const auto file_glob = str_arg(args, "glob");
+        std::string out;
+        std::size_t matches = 0, files = 0;
+        bool truncated = false;
+
+        walk(root, ctx.cfg->workdir, [&](const std::string& rel, const fs::path& abs) {
+            if (truncated) return;
+            if (file_glob && !glob_match(*file_glob, rel) &&
+                !glob_match(*file_glob, fs::path(rel).filename().string()))
+                return;
+
+            std::error_code e;
+            if (fs::file_size(abs, e) > kMaxFileBytes || e) return;   // 太大，正则会很慢
+
+            std::ifstream in(abs, std::ios::binary);
+            if (!in) return;
+            if (looks_binary(in)) return;
+            in.clear();
+            in.seekg(0);
+
+            std::string line;
+            int lineno = 0;
+            bool counted = false;
+            while (std::getline(in, line)) {
+                ++lineno;
+                if (!std::regex_search(line, re)) continue;
+                if (++matches > kMaxMatches) { truncated = true; return; }
+                if (!counted) { ++files; counted = true; }
+                if (line.size() > kMaxLineChars)
+                    line = line.substr(0, kMaxLineChars) + " …(行过长已截断)";
+                out += std::format("{}:{}: {}\n", rel, lineno, line);
+            }
+        });
+
+        if (out.empty()) return ToolResult{.content = "没有匹配 " + *pattern + " 的内容"};
+        if (truncated)
+            out += std::format("... (超过 {} 处匹配，用更精确的正则或 glob 缩小范围)\n",
+                               kMaxMatches);
+        return ToolResult{.content = std::move(out),
+                          .metadata = {{"matches", matches}, {"files", files},
+                                       {"truncated", truncated}}};
+    }
+
+  private:
+    static constexpr std::size_t kMaxMatches = 200;
+    static constexpr std::uintmax_t kMaxFileBytes = 2u << 20;   // 2 MiB
+    static constexpr std::size_t kMaxLineChars = 400;
+    static constexpr std::streamsize kSniffBytes = 8192;
+
+    /// NUL 字节 = 二进制。文本文件里不会有，可执行文件、.o、图片里到处都是。
+    static bool looks_binary(std::istream& in) {
+        char buf[kSniffBytes];
+        in.read(buf, kSniffBytes);
+        const auto got = in.gcount();
+        return std::memchr(buf, '\0', static_cast<std::size_t>(got)) != nullptr;
+    }
+};
+
 /// @brief Runs one shell command through run_shell.
 ///
 /// @note Makes no permission decision of its own. By the time run() is called
@@ -431,8 +680,8 @@ class BashTool final : public Tool {
 ToolPtr make_read_tool() { return std::make_shared<ReadTool>(); }
 ToolPtr make_write_tool() { return std::make_shared<WriteTool>(); }
 ToolPtr make_edit_tool() { return std::make_shared<EditTool>(); }
-ToolPtr make_glob_tool() { todo("Stage 2: glob —— 按修改时间倒序"); }
-ToolPtr make_grep_tool() { todo("Stage 2: grep —— std::regex 够用，注意跳过二进制/大文件"); }
+ToolPtr make_glob_tool() { return std::make_shared<GlobTool>(); }
+ToolPtr make_grep_tool() { return std::make_shared<GrepTool>(); }
 ToolPtr make_bash_tool() { return std::make_shared<BashTool>(); }
 ToolPtr make_todo_tool() { todo("Stage 4: todo —— 覆盖式提交，每轮由 reminder 回灌"); }
 ToolPtr make_skill_tool() { todo("Stage 5: skill —— 按名字加载完整手册"); }
@@ -448,9 +697,10 @@ std::vector<ToolPtr> builtin_tools(const Config& cfg) {
     v.push_back(make_read_tool());
     v.push_back(make_write_tool());
     v.push_back(make_edit_tool());
+    v.push_back(make_glob_tool());
+    v.push_back(make_grep_tool());
     v.push_back(make_bash_tool());
 
-    // TODO(Stage 2): glob / grep
     // TODO(Stage 4/5/6): 下面这些工厂现在还是 todo()，一调就抛。开关默认为 true，
     //   所以要等对应 Stage 写完再打开，否则默认配置下 agent 直接起不来。
     (void)cfg;
