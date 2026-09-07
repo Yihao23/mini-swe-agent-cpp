@@ -9,6 +9,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 
@@ -20,6 +21,7 @@
 #include "mini_agent/scheduler.hpp"
 #include "mini_agent/session.hpp"
 #include "mini_agent/tool.hpp"
+#include "mini_agent/tools/builtin.hpp"
 
 namespace mini {
 
@@ -51,5 +53,50 @@ inline Config doc_config(PermissionMode mode = PermissionMode::Ask) {
 
 /// @brief A scratch directory examples can run commands in.
 inline std::filesystem::path doc_workdir() { return doc_config().workdir; }
+
+/// @brief A wired-up place to run a real tool: config, session, sandbox, context.
+///
+/// Each instance gets its own directory, so two examples in the same binary
+/// cannot see each other's files. Without that, an example would depend on
+/// which ones happened to run before it.
+struct DocTools {
+    std::filesystem::path root;
+    Config cfg;
+    Session session;
+    std::unique_ptr<Sandbox> sandbox;
+    ToolContext ctx;
+
+    DocTools() {
+        static int seq = 0;
+        root = std::filesystem::temp_directory_path() /
+               ("mini-agent-doc-tools-" + std::to_string(++seq));
+        std::filesystem::remove_all(root);
+        std::filesystem::create_directories(root / "work");
+        cfg.workdir = std::filesystem::canonical(root / "work");
+        cfg.permission_mode = PermissionMode::Yolo;
+        cfg.normalize();
+        sandbox = std::make_unique<Sandbox>(cfg);
+        ctx.cfg = &cfg;
+        ctx.sandbox = sandbox.get();
+        ctx.session = &session;
+    }
+    ~DocTools() {
+        std::error_code ec;
+        std::filesystem::remove_all(root, ec);
+    }
+
+    ToolResult run(const ToolPtr& t, Json args) { return t->run(args, ctx); }
+
+    /// @brief The file's whole content, for asserting on what a tool produced.
+    std::string slurp(const std::string& rel) const {
+        std::ifstream in(cfg.workdir / rel, std::ios::binary);
+        return std::string((std::istreambuf_iterator<char>(in)), {});
+    }
+
+    /// @brief Put a file there without going through a tool.
+    void seed(const std::string& rel, const std::string& body) const {
+        std::ofstream(cfg.workdir / rel, std::ios::binary) << body;
+    }
+};
 
 }  // namespace mini

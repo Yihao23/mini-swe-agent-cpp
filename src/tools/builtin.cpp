@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <optional>
 #include <system_error>
 
 #include "mini_agent/config.hpp"
@@ -29,6 +30,39 @@ namespace fs = std::filesystem;
 
 namespace {
 
+// ── 取参数 ──────────────────────────────────────────────────────────────────
+//
+// ⚠️ 不要用 args.value(key, default)。key 存在但类型不对时它**抛异常**，不是
+//    退回默认值 —— {"path": 42} 会抛 json::type_error。schema 是给模型的提示，
+//    不是保证；模型给错类型是家常便饭。executor 虽然兜得住异常，但模型收到的
+//    会是一句没头没尾的 what()，看不出该改哪个参数。
+
+/// 取一个字符串参数；缺失或类型不对都返回 nullopt。
+std::optional<std::string> str_arg(const Json& args, const char* key) {
+    if (!args.is_object()) return std::nullopt;
+    const auto it = args.find(key);
+    if (it == args.end() || !it->is_string()) return std::nullopt;
+    return it->get<std::string>();
+}
+
+/// 取一个整数参数；缺失或类型不对都退回 fallback。
+int int_arg(const Json& args, const char* key, int fallback) {
+    if (!args.is_object()) return fallback;
+    const auto it = args.find(key);
+    return (it != args.end() && it->is_number_integer()) ? it->get<int>() : fallback;
+}
+
+/// @brief Reads a file with line numbers, or lists a directory.
+///
+/// @note Line numbers are part of the output, not decoration: edit works by
+///       matching a unique string, and the model needs somewhere to anchor
+///       when it explains which part it is changing.
+/// @note Stamps the file's mtime onto the session. edit and write both read
+///       that back — this is the only thing that makes "you have not read this
+///       file" and "it changed after you read it" answerable.
+/// @note A directory path lists its entries rather than failing. The model
+///       often cannot tell which it has; failing would cost a round trip to
+///       learn something the call already knew.
 class ReadTool final : public Tool {
   public:
     std::string_view name() const override { return "read"; }
@@ -55,8 +89,9 @@ class ReadTool final : public Tool {
     bool requires_permission() const override { return false; }  // 越界防护在 sandbox，不在这
 
     ToolResult run(const Json& args, ToolContext& ctx) override {
-        const auto rel = args.value("path", std::string{});
-        if (rel.empty()) return ToolResult::error("缺少 path 参数");
+        const auto path = str_arg(args, "path");
+        if (!path || path->empty()) return ToolResult::error("缺少 path 参数（必须是字符串）");
+        const auto& rel = *path;
 
         // 路径边界由 sandbox 统一判定 —— 模型给的 path 是不可信输入，
         // `..`、符号链接、绝对路径都要挡在这里。
@@ -71,8 +106,8 @@ class ReadTool final : public Tool {
         std::ifstream in(p);
         if (!in) return ToolResult::error("打不开: " + rel);
 
-        const int offset = std::max(1, args.value("offset", 1));   // 从 1 开始，和编辑器一致
-        const int limit = std::max(1, args.value("limit", 2000));
+        const int offset = std::max(1, int_arg(args, "offset", 1));   // 从 1 开始，和编辑器一致
+        const int limit = std::max(1, int_arg(args, "limit", 2000));
 
         std::string out;
         std::string line;
@@ -120,6 +155,109 @@ class ReadTool final : public Tool {
     }
 };
 
+/// @brief Creates a file, or replaces one whole.
+///
+/// @note Overwriting a file the model has not read is refused, the same
+///       discipline edit follows. write replaces everything, so doing it
+///       sight-unseen deletes work the model never knew was there. A file that
+///       does not exist yet has nothing to lose and needs no prior read.
+/// @note A file this tool just wrote counts as read from then on — its content
+///       is what we put there, so nothing about it is unknown.
+class WriteTool final : public Tool {
+  public:
+    std::string_view name() const override { return "write"; }
+
+    std::string_view description() const override {
+        return "把 content 写进 path，文件不存在就新建、已存在则**整个覆盖**。"
+               "只改一小段时用 edit，别用 write 重写整个文件。"
+               "覆盖已有文件前必须先 read。";
+    }
+
+    Json input_schema() const override {
+        return Json{
+            {"type", "object"},
+            {"properties",
+             {{"path", {{"type", "string"}, {"description", "文件路径，相对于工作目录"}}},
+              {"content", {{"type", "string"}, {"description", "文件的完整内容"}}}}},
+            {"required", Json::array({"path", "content"})},
+        };
+    }
+
+    bool read_only() const override { return false; }
+    bool requires_permission() const override { return true; }
+
+    /// ⚠️ 这是本文件里最关键的一个 override。默认实现取「按 key 字母序的第一个
+    ///    字符串参数」，而 content < path —— 沙箱会拿**要写入的正文**去匹配规则，
+    ///    于是 `Write(src/**)` 这类规则永远命中不了。整层权限静默失效，
+    ///    没有任何报错。删掉这个函数，代码照样编译、照样跑。
+    std::string subject(const Json& args) const override {
+        return str_arg(args, "path").value_or(std::string{});
+    }
+
+    ToolResult run(const Json& args, ToolContext& ctx) override {
+        const auto path = str_arg(args, "path");
+        const auto body = str_arg(args, "content");
+        if (!path || path->empty()) return ToolResult::error("缺少 path 参数（必须是字符串）");
+        if (!body) return ToolResult::error("缺少 content 参数（必须是字符串）");
+        const auto& rel = *path;
+
+        const auto [p, decision] = ctx.sandbox->resolve_path(rel);
+        if (!decision.allowed()) return ToolResult::error(decision.reason + ": " + rel);
+
+        std::error_code ec;
+        const bool existed = fs::exists(p, ec);
+        if (existed && fs::is_directory(p, ec))
+            return ToolResult::error(rel + " 是一个目录");
+
+        // ⚠️ 覆盖已有文件前必须先 read —— write 是整个替换，没读过就写等于
+        //    凭想象删掉别人的代码。新文件没有这个问题。
+        if (existed) {
+            if (!ctx.session) return ToolResult::error("没有会话上下文，无法确认是否已 read");
+            if (!ctx.session->read_files().contains(p.string()))
+                return ToolResult::error(rel + " 已存在，必须先用 read 读过才能覆盖");
+        }
+
+        // 父目录可能还不存在。不建的话模型得先跑一条 bash mkdir，白费一轮。
+        if (p.has_parent_path()) {
+            fs::create_directories(p.parent_path(), ec);
+            if (ec) return ToolResult::error("无法创建目录 " + p.parent_path().string());
+        }
+
+        std::ofstream out(p, std::ios::binary | std::ios::trunc);
+        if (!out) return ToolResult::error("无法写入: " + rel);
+        out << *body;
+        out.close();
+        if (!out) return ToolResult::error("写入 " + rel + " 时出错");
+
+        // 这次改动是我们自己做的：记下 mtime，下一次 edit 才不会当成「被人改过」。
+        // 顺带也让刚新建的文件算作「读过」——内容就是我们刚写的，没有未知。
+        if (ctx.session) {
+            const auto stamp = fs::last_write_time(p, ec);
+            if (!ec) ctx.session->read_files()[p.string()] = stamp;
+        }
+
+        const auto lines = 1 + std::ranges::count(*body, '\n');
+        return ToolResult{
+            .content = std::format("已{} {}（{} 字节，{} 行）", existed ? "覆盖" : "创建", rel,
+                                   body->size(), body->empty() ? 0 : lines),
+            .metadata = {{"created", !existed}, {"bytes", body->size()}},
+        };
+    }
+};
+
+/// @brief Replaces one span inside a file.
+///
+/// Three guards, and each exists because the failure it prevents is silent:
+///   1. the file must have been read — otherwise the model is editing from
+///      imagination;
+///   2. it must not have changed since — otherwise this overwrites whatever
+///      the other writer did;
+///   3. old_string must be unique — otherwise only the first of several
+///      matches changes and the model believes it changed them all.
+///
+/// @note write has none of guards 2 and 3 and does not need them: replacing
+///       the file whole is its stated job, and there is no "which occurrence"
+///       to get wrong.
 class EditTool final : public Tool {
   public:
     std::string_view name() const override { return "edit"; }
@@ -147,14 +285,18 @@ class EditTool final : public Tool {
     ///    遍历：new_string < old_string < path，默认会把**要写入的内容**当成审查对象，
     ///    于是 Write(src/**) 这类规则永远匹配不上 —— 沙箱静默失效。
     std::string subject(const Json& args) const override {
-        return args.value("path", std::string{});
+        return str_arg(args, "path").value_or(std::string{});
     }
 
     ToolResult run(const Json& args, ToolContext& ctx) override {
-        const auto rel = args.value("path", std::string{});
-        const auto old_s = args.value("old_string", std::string{});
-        const auto new_s = args.value("new_string", std::string{});
-        if (rel.empty()) return ToolResult::error("缺少 path 参数");
+        const auto path = str_arg(args, "path");
+        const auto old_arg = str_arg(args, "old_string");
+        const auto new_arg = str_arg(args, "new_string");
+        if (!path || path->empty()) return ToolResult::error("缺少 path 参数（必须是字符串）");
+        if (!old_arg) return ToolResult::error("缺少 old_string 参数（必须是字符串）");
+        const auto& rel = *path;
+        const auto& old_s = *old_arg;
+        const std::string new_s = new_arg.value_or(std::string{});   // 允许空 = 删除这段
         if (old_s.empty()) return ToolResult::error("old_string 不能为空");
 
         const auto [p, decision] = ctx.sandbox->resolve_path(rel);
@@ -244,23 +386,17 @@ class BashTool final : public Tool {
     ///    结果碰巧是对的。仍然显式写出来：沙箱拿这个字符串去拆段、匹配 kDangerous，
     ///    哪天多加一个字符串参数（比如 description），默认实现会静默交出错误的东西。
     std::string subject(const Json& args) const override {
-        return args.value("command", std::string{});
+        return str_arg(args, "command").value_or(std::string{});
     }
 
     ToolResult run(const Json& args, ToolContext& ctx) override {
-        // ⚠️ 不能用 args.value("command", "")：key 存在但类型不对时它**抛异常**，
-        //    不是返回默认值。schema 只是给模型的提示，不是保证 —— 模型完全可能
-        //    发 {"command": 42}。executor 虽然会兜住异常，但报错文字会变成一句
-        //    没头没尾的 what()，模型看不懂该怎么改。
-        if (!args.is_object() || !args.contains("command") || !args["command"].is_string())
-            return ToolResult::error("缺少 command 参数（必须是字符串）");
-        const auto cmd = args["command"].get<std::string>();
+        const auto command = str_arg(args, "command");
+        if (!command) return ToolResult::error("缺少 command 参数（必须是字符串）");
+        const auto& cmd = *command;
         if (cmd.empty()) return ToolResult::error("command 不能为空");
 
         const int cfg_timeout = ctx.cfg->tool_timeout_sec;
-        const int want = args.contains("timeout_sec") && args["timeout_sec"].is_number_integer()
-                             ? args["timeout_sec"].get<int>()
-                             : cfg_timeout;
+        const int want = int_arg(args, "timeout_sec", cfg_timeout);
         // 模型给的超时只能往下调，不能超过配置上限 —— 否则它可以自己解除限制。
         const auto timeout = std::chrono::seconds{std::clamp(want, 1, cfg_timeout)};
 
@@ -293,7 +429,7 @@ class BashTool final : public Tool {
 }  // namespace
 
 ToolPtr make_read_tool() { return std::make_shared<ReadTool>(); }
-ToolPtr make_write_tool() { todo("Stage 2: write"); }
+ToolPtr make_write_tool() { return std::make_shared<WriteTool>(); }
 ToolPtr make_edit_tool() { return std::make_shared<EditTool>(); }
 ToolPtr make_glob_tool() { todo("Stage 2: glob —— 按修改时间倒序"); }
 ToolPtr make_grep_tool() { todo("Stage 2: grep —— std::regex 够用，注意跳过二进制/大文件"); }
@@ -306,6 +442,22 @@ ToolPtr make_task_graph_tool() { todo("Stage 6: task_graph —— 派一张带�
 ToolPtr make_bash_output_tool() { todo("Stage 6: bash_output"); }
 ToolPtr make_kill_task_tool() { todo("Stage 6: kill_task"); }
 
-std::vector<ToolPtr> builtin_tools(const Config&) { todo("Stage 2: builtin_tools —— 按开关拼表"); }
+std::vector<ToolPtr> builtin_tools(const Config& cfg) {
+    // 顺序无所谓 —— ToolRegistry::schemas() 会按名字排序（缓存前缀要稳定）。
+    std::vector<ToolPtr> v;
+    v.push_back(make_read_tool());
+    v.push_back(make_write_tool());
+    v.push_back(make_edit_tool());
+    v.push_back(make_bash_tool());
+
+    // TODO(Stage 2): glob / grep
+    // TODO(Stage 4/5/6): 下面这些工厂现在还是 todo()，一调就抛。开关默认为 true，
+    //   所以要等对应 Stage 写完再打开，否则默认配置下 agent 直接起不来。
+    (void)cfg;
+    // if (cfg.enable_memory) v.push_back(make_memory_tool());   // Stage 5
+    // if (cfg.enable_skills) v.push_back(make_skill_tool());    // Stage 5
+    // if (cfg.enable_subagents) v.push_back(make_task_tool());  // Stage 6
+    return v;
+}
 
 }  // namespace mini

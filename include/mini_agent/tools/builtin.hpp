@@ -21,11 +21,106 @@ namespace mini {
 struct Config;
 
 // --- Stage 2 ---
+
+/// @brief `read` — file contents with line numbers, or a directory listing.
+///
+/// @note read_only, and the only builtin that declares requires_permission()
+///       false. Path containment still applies: an exempt tool skips the
+///       question, not the boundary.
+/// @note Records what it read on the session, which is what lets edit and
+///       write refuse to change a file the model has not seen.
+///
+/// 参数：path，可选 offset / limit。path 是目录时列出条目。
 ToolPtr make_read_tool();
+
+/// @brief `write` — create a file, or replace one whole.
+///
+/// @warning Overwriting a file the model has not read is refused. write
+///          replaces everything, so doing it unseen deletes work nobody
+///          looked at. A file that does not exist yet needs no prior read.
+///
+/// @note Prefer edit for a small change. write makes the model reproduce the
+///       whole file, which is slow, expensive, and silently destructive when
+///       it mistypes a line it was not even changing.
+/// @note Creates missing parent directories, so `src/new/mod.py` works without
+///       a round trip through bash mkdir.
+///
+/// @code{.test}
+/// @setup DocTools t;
+/// @setup const auto write = make_write_tool();
+///
+/// // ⚠️ subject() 交给沙箱的必须是 path。默认实现按 key 字母序取第一个字符串，
+/// //    content < path —— 那样沙箱审查的就是要写入的正文，规则永远命不中。
+/// write->subject(Json{{"content","x = 1"},{"path","src/a.py"}})   ==> "src/a.py"
+///
+/// // 新建：不需要先 read，父目录自动建
+/// t.run(write, Json{{"path","src/a.py"},{"content","x = 1\n"}}).is_error   ==> false
+/// t.slurp("src/a.py")                                                      ==> "x = 1\n"
+///
+/// // 已存在但没读过：拒绝，文件原封不动
+/// @setup t.seed("old.py", "重要代码\n");
+/// t.run(write, Json{{"path","old.py"},{"content","没了"}}).is_error         ==> true
+/// t.slurp("old.py")                                                        ==> "重要代码\n"
+///
+/// // 读过之后就放行
+/// @setup t.run(make_read_tool(), Json{{"path","old.py"}});
+/// t.run(write, Json{{"path","old.py"},{"content","新的\n"}}).is_error       ==> false
+/// t.slurp("old.py")                                                        ==> "新的\n"
+/// @endcode
+///
+/// 参数：path、content，都必填。
 ToolPtr make_write_tool();
+
+/// @brief `edit` — replace one span inside a file.
+///
+/// @warning old_string must occur exactly once. Replacing the first of several
+///          matches without saying so leaves the model believing it changed
+///          them all.
+///
+/// @note Requires a prior read, and refuses when the file changed after that
+///       read — that edit would silently overwrite whatever the other writer
+///       did. write has no such check: replacing everything is its job.
+/// @note An empty new_string deletes the span.
+///
+/// @code{.test}
+/// @setup DocTools t;
+/// @setup const auto write = make_write_tool();
+/// @setup const auto edit  = make_edit_tool();
+/// @setup t.run(write, Json{{"path","a.py"},{"content","x = 1\ny = 2\nz = 2\n"}});
+///
+/// // 改一行用 edit，不必把整个文件重发一遍
+/// t.run(edit, Json{{"path","a.py"},{"old_string","x = 1"},{"new_string","x = 9"}}).is_error ==> false
+/// t.slurp("a.py")                                                            ==> "x = 9\ny = 2\nz = 2\n"
+///
+/// // old_string 出现两次（"= 2" 在 y 和 z 两行里）→ 拒绝，不猜是哪一个
+/// t.run(edit, Json{{"path","a.py"},{"old_string","= 2"},{"new_string","= 8"}}).is_error     ==> true
+/// t.slurp("a.py")                                                            ==> "x = 9\ny = 2\nz = 2\n"
+///
+/// // 没读过的文件不能改
+/// @setup t.seed("other.py", "q = 1\n");
+/// t.run(edit, Json{{"path","other.py"},{"old_string","q = 1"},{"new_string","q = 2"}}).is_error ==> true
+/// @endcode
+///
+/// 参数：path、old_string、new_string。
 ToolPtr make_edit_tool();
-ToolPtr make_glob_tool();
-ToolPtr make_grep_tool();
+
+ToolPtr make_glob_tool();   // TODO(Stage 2): 按修改时间倒序
+ToolPtr make_grep_tool();   // TODO(Stage 2): std::regex 够用，跳过二进制/大文件
+
+/// @brief `bash` — run one shell command in the workdir.
+///
+/// @warning Makes no permission decision of its own. Sandbox::authorize has
+///          already split the line on `&& || ; |` and checked every segment
+///          before run() is reached; a second check here would be a second
+///          place to keep the policy correct.
+///
+/// @note Not read_only, so the executor never runs it beside another tool.
+/// @note A model-supplied timeout_sec is clamped to Config::tool_timeout_sec.
+///       Honoured as given, the model could lift its own limit.
+/// @note A non-zero exit is an error **with the output kept** — a compiler
+///       error or a failing test is exactly what the model needs to read next.
+///
+/// 参数：command，可选 timeout_sec。
 ToolPtr make_bash_tool();
 
 // --- Stage 4：agent 自己维护的计划清单，每轮通过 reminder 回灌 ---
@@ -41,8 +136,21 @@ ToolPtr make_task_graph_tool();    // 派一张带依赖的任务图
 ToolPtr make_bash_output_tool();   // 读后台任务输出
 ToolPtr make_kill_task_tool();
 
-/// 按 cfg 的开关拼出内置工具表。
-/// 顺序无所谓 —— ToolRegistry::schemas() 会按名字排序（缓存前缀要稳定）。
+/// @brief The builtin set for one agent, assembled from the config switches.
+///
+/// @param cfg Read for its enable_* flags.
+/// @return read, write, edit and bash today; the Stage 4/5/6 tools join as
+///         they land.
+///
+/// @warning A factory that is still todo() throws the moment it is called, and
+///          the enable_* flags default to true — so a tool only goes in here
+///          once its factory actually returns something. Getting that wrong
+///          stops the agent from starting under the default config.
+///
+/// @note Order does not matter: ToolRegistry::schemas() sorts by name, because
+///       the prompt cache matches a byte-exact prefix.
+/// @note This is the single place tools are enumerated. App used to list them
+///       by hand, which meant two places to keep in step.
 std::vector<ToolPtr> builtin_tools(const Config& cfg);
 
 }  // namespace mini

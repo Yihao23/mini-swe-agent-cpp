@@ -198,4 +198,41 @@ TEST(doc_include_mini_agent_tool_hpp_L250) {
     CHECK_MSG((ToolRegistry{}.schemas().is_array()) == (true), "include/mini_agent/tool.hpp:264 的示例失效了");
 }
 
+/// From include/mini_agent/tools/builtin.hpp:48
+TEST(doc_include_mini_agent_tools_builtin_hpp_L48) {
+    DocTools t;
+    const auto write = make_write_tool();
+    // ⚠️ subject() 交给沙箱的必须是 path。默认实现按 key 字母序取第一个字符串，
+    //    content < path —— 那样沙箱审查的就是要写入的正文，规则永远命不中。
+    CHECK_MSG((write->subject(Json{{"content","x = 1"},{"path","src/a.py"}})) == ("src/a.py"), "include/mini_agent/tools/builtin.hpp:54 的示例失效了");
+    // 新建：不需要先 read，父目录自动建
+    CHECK_MSG((t.run(write, Json{{"path","src/a.py"},{"content","x = 1\n"}}).is_error) == (false), "include/mini_agent/tools/builtin.hpp:57 的示例失效了");
+    CHECK_MSG((t.slurp("src/a.py")) == ("x = 1\n"), "include/mini_agent/tools/builtin.hpp:58 的示例失效了");
+    // 已存在但没读过：拒绝，文件原封不动
+    t.seed("old.py", "重要代码\n");
+    CHECK_MSG((t.run(write, Json{{"path","old.py"},{"content","没了"}}).is_error) == (true), "include/mini_agent/tools/builtin.hpp:62 的示例失效了");
+    CHECK_MSG((t.slurp("old.py")) == ("重要代码\n"), "include/mini_agent/tools/builtin.hpp:63 的示例失效了");
+    // 读过之后就放行
+    t.run(make_read_tool(), Json{{"path","old.py"}});
+    CHECK_MSG((t.run(write, Json{{"path","old.py"},{"content","新的\n"}}).is_error) == (false), "include/mini_agent/tools/builtin.hpp:67 的示例失效了");
+    CHECK_MSG((t.slurp("old.py")) == ("新的\n"), "include/mini_agent/tools/builtin.hpp:68 的示例失效了");
+}
+
+/// From include/mini_agent/tools/builtin.hpp:85
+TEST(doc_include_mini_agent_tools_builtin_hpp_L85) {
+    DocTools t;
+    const auto write = make_write_tool();
+    const auto edit  = make_edit_tool();
+    t.run(write, Json{{"path","a.py"},{"content","x = 1\ny = 2\nz = 2\n"}});
+    // 改一行用 edit，不必把整个文件重发一遍
+    CHECK_MSG((t.run(edit, Json{{"path","a.py"},{"old_string","x = 1"},{"new_string","x = 9"}}).is_error) == (false), "include/mini_agent/tools/builtin.hpp:92 的示例失效了");
+    CHECK_MSG((t.slurp("a.py")) == ("x = 9\ny = 2\nz = 2\n"), "include/mini_agent/tools/builtin.hpp:93 的示例失效了");
+    // old_string 出现两次（"= 2" 在 y 和 z 两行里）→ 拒绝，不猜是哪一个
+    CHECK_MSG((t.run(edit, Json{{"path","a.py"},{"old_string","= 2"},{"new_string","= 8"}}).is_error) == (true), "include/mini_agent/tools/builtin.hpp:96 的示例失效了");
+    CHECK_MSG((t.slurp("a.py")) == ("x = 9\ny = 2\nz = 2\n"), "include/mini_agent/tools/builtin.hpp:97 的示例失效了");
+    // 没读过的文件不能改
+    t.seed("other.py", "q = 1\n");
+    CHECK_MSG((t.run(edit, Json{{"path","other.py"},{"old_string","q = 1"},{"new_string","q = 2"}}).is_error) == (true), "include/mini_agent/tools/builtin.hpp:101 的示例失效了");
+}
+
 int main() { return mt::run_all(); }
