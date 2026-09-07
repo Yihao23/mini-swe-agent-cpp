@@ -67,6 +67,53 @@ S4_REMIND_NEW = '    return std::string(text);'
 S4_RETURN_OLD = '        return out;\n    }\n    return {};'
 S4_RETURN_NEW = '        acc += out;\n    }\n    return acc;'
 
+M_SORT_OLD = '    std::ranges::sort(index_, {}, &MemoryItem::name);'
+M_SORT_NEW = '    // MUTANT'
+M_DESC_OLD = '    const auto d = fm->fields.find("description");\n    if (d == fm->fields.end() || d->second.empty()) return std::nullopt;\n    // ⚠️ 没有 description 就整条丢弃，不是给个空串。一条描述为空的记忆会进\n    //    索引、占位置，而模型永远不会去加载它 —— 静默失效比读不到更糟。\n    item.description = d->second;'
+M_DESC_NEW = '    const auto d = fm->fields.find("description");\n    if (d != fm->fields.end()) item.description = d->second;'
+M_DESCW_OLD = '            score += 4 * std::min(count_hits(desc_l, w), 2);'
+M_DESCW_NEW = '            score += 1 * std::min(count_hits(desc_l, w), 2);'
+M_BODYCAP_OLD = '            score += 1 * std::min(count_hits(body_l, w), 3);'
+M_BODYCAP_NEW = '            score += 1 * count_hits(body_l, w);'
+M_REIDX_OLD = '    rebuild_index();   // 下一轮的 system prompt 就该看得见它'
+M_REIDX_NEW = '    // MUTANT'
+M_IDXDESC_OLD = '        out += std::format("  {} [{}] — {}\\n", item.name, type_name(item.type), item.description);'
+M_IDXDESC_NEW = '        out += std::format("  {} [{}] — {}\\n", item.name, type_name(item.type), item.body);'
+F_CLOSED_OLD = '    if (!closed) return std::nullopt;   // 没有结束的 ---，整个文件当作没有 frontmatter'
+F_CLOSED_NEW = '    (void)closed;'
+F_COLON_OLD = "        const auto colon = raw.find(':');"
+F_COLON_NEW = "        const auto colon = raw.rfind(':');"
+
+S_SHADOW_OLD = '                skills_.emplace(s->name, std::move(*s));'
+S_SHADOW_NEW = '                skills_.insert_or_assign(s->name, std::move(*s));'
+S_DIRONLY_OLD = '            // 只是省掉一次无谓的开文件尝试 —— 「skill 必须是文件夹」这条规矩\n            // 其实是下面那句路径拼接保证的：对 loose.md 会去开\n            // loose.md/SKILL.md，不存在，照样跳过。\n            if (!e.is_directory(ec)) continue;\n            if (auto s = parse_skill_file(e.path() / "SKILL.md"))\n                skills_.emplace(s->name, std::move(*s));'
+S_DIRONLY_NEW = '            const auto md = e.is_directory(ec) ? e.path() / "SKILL.md" : e.path();\n            if (auto s = parse_skill_file(md))\n                skills_.emplace(s->name, std::move(*s));'
+S_DESC_OLD = '    const auto d = fm->fields.find("description");\n    if (d == fm->fields.end() || d->second.empty()) return std::nullopt;\n    s.description = d->second;'
+S_DESC_NEW = '    const auto d = fm->fields.find("description");\n    if (d != fm->fields.end()) s.description = d->second;'
+S_FOLDER_OLD = '    s.name = n != fm->fields.end() ? n->second : skill_md.parent_path().filename().string();'
+S_FOLDER_NEW = '    s.name = n != fm->fields.end() ? n->second : skill_md.filename().stem().string();'
+S_SIBS_OLD = '    std::ranges::sort(siblings);   // 顺序稳定：文件系统的遍历顺序不保证'
+S_SIBS_NEW = '    // MUTANT'
+S_SKIPSELF_OLD = '        if (fname == "SKILL.md") continue;'
+S_SKIPSELF_NEW = '        // MUTANT'
+S_NOSIBS_OLD = '    if (siblings.empty()) return out;'
+S_NOSIBS_NEW = '    // MUTANT'
+S_IDXDESC_OLD = '        out += std::format("  {} — {}\\n", name, s.description);'
+S_IDXDESC_NEW = '        out += std::format("  {} — {}\\n", name, s.body);'
+
+T5_SUBJ_OLD = '    std::string subject(const Json& args) const override {\n        if (const auto n = str_arg(args, "name")) return *n;\n        return str_arg(args, "action").value_or(std::string{});\n    }'
+T5_SUBJ_NEW = '    std::string subject(const Json& args) const override {\n        return Tool::subject(args);\n    }'
+T5_DESC_OLD = '            if (!desc || desc->empty())\n                return ToolResult::error("write 需要 description（写「什么时候该用它」）");'
+T5_DESC_NEW = '            // MUTANT'
+T5_ACTION_OLD = '        if (*action != "load" && *action != "write" && *action != "delete")\n            return ToolResult::error("未知 action: " + *action + "（search/load/write/delete）");\n'
+T5_ACTION_NEW = ''
+T5_NAMES_OLD = '            std::string names;\n            for (const Skill* k : ctx.skills->all()) names += (names.empty() ? "" : ", ") + k->name;\n            return ToolResult::error("没有名为 " + *want + " 的 skill。可用: " +\n                                     (names.empty() ? "（一个都没有）" : names));'
+T5_NAMES_NEW = '            return ToolResult::error("没有名为 " + *want + " 的 skill");'
+T5_NULLMEM_OLD = '        if (!ctx.memory) return ToolResult::error("memory 未启用");'
+T5_NULLMEM_NEW = '        // MUTANT'
+T5_DIRS_OLD = '    if (enable_memory) fs::create_directories(memory_dir());\n    if (enable_skills && !skills_dirs().empty()) fs::create_directories(skills_dirs().front());'
+T5_DIRS_NEW = '    fs::create_directories(memory_dir());\n    if (!skills_dirs().empty()) fs::create_directories(skills_dirs().front());'
+
 # 每项: name, file, edits[(old, new)], binaries, expect[用例名子串], note
 # 可选 known_gap: 已知抓不到，附上为什么。留在清单里是有意的 —— 把没覆盖的地方
 # 记下来，比从清单里删掉假装不存在有用。
@@ -233,6 +280,192 @@ MUTANTS = [
         binaries=["test_search_tools"],
         expect=["glob_sorts_newest_first"],
         note="模型问「有哪些 cpp」时要的几乎总是最近动过的，字母序把 app.cpp 排前面",
+    ),
+    # ── Stage 5：长期记忆与 frontmatter ──────────────────────────────────
+    dict(
+        name='memory 索引不排序',
+        file='src/memory.cpp',
+        edits=[(M_SORT_OLD, M_SORT_NEW)],
+        binaries=['test_memory'],
+        expect=['the_index_order_is_stable'],
+        note='index_text 进 system prompt，目录遍历顺序不保证 → 缓存每轮作废，账单十倍而功能正常',
+    ),
+    dict(
+        name='没有 description 的记忆也进索引',
+        file='src/memory.cpp',
+        edits=[(M_DESC_OLD, M_DESC_NEW)],
+        binaries=['test_memory'],
+        expect=['a_memory_without_a_description_is_discarded'],
+        note='空描述的记忆占着索引位置，模型永远不会去加载它 —— 静默失效。'
+             '注意变异形状：光把那个 return 去掉会解引用 end() 迭代器（UB），'
+             '测的不是这条守卫。这里直接写出「空描述也放行」这个真正的 bug。',
+    ),
+    dict(
+        name='description 命中不加权',
+        file='src/memory.cpp',
+        edits=[(M_DESCW_OLD, M_DESCW_NEW)],
+        binaries=['test_memory'],
+        expect=['search_weights_the_description_above_the_body'],
+        note='真正相关的那条掉出 limit，排序退化成按名字',
+    ),
+    dict(
+        name='正文命中不封顶',
+        file='src/memory.cpp',
+        edits=[(M_BODYCAP_OLD, M_BODYCAP_NEW)],
+        binaries=['test_memory'],
+        expect=['a_long_body_cannot_win_by_length_alone'],
+        note='堆砌关键词的长文永远排第一',
+    ),
+    dict(
+        name='write 之后不重建索引',
+        file='src/memory.cpp',
+        edits=[(M_REIDX_OLD, M_REIDX_NEW)],
+        binaries=['test_memory'],
+        expect=['write_is_visible_immediately'],
+        note='这一轮写的记忆下一轮 system 里看不到',
+    ),
+    dict(
+        name='索引里放正文而不是描述',
+        file='src/memory.cpp',
+        edits=[(M_IDXDESC_OLD, M_IDXDESC_NEW)],
+        binaries=['test_memory'],
+        expect=['the_index_carries_the_description_not_the_body'],
+        note='渐进式披露整个失效，每轮固定开销几千 token',
+    ),
+    dict(
+        name='frontmatter 不要求结束的 ---',
+        file='src/frontmatter.cpp',
+        edits=[(F_CLOSED_OLD, F_CLOSED_NEW)],
+        binaries=['test_memory'],
+        expect=['frontmatter_requires_both_delimiters'],
+        note='整个文件被当成 frontmatter 吞掉，正文全丢',
+    ),
+    dict(
+        name='frontmatter 按最后一个冒号切',
+        file='src/frontmatter.cpp',
+        edits=[(F_COLON_OLD, F_COLON_NEW)],
+        binaries=['test_memory'],
+        expect=['frontmatter_splits_on_the_first_colon_not_the_last'],
+        note='值里有冒号时键被切坏',
+    ),
+    # ── Stage 5：两个工具与接线 ──────────────────────────────────────────
+    dict(
+        name='memory 工具的 subject 用默认实现',
+        file='src/tools/builtin.cpp',
+        edits=[(T5_SUBJ_OLD, T5_SUBJ_NEW)],
+        binaries=['test_stage5_tools', 'test_docs'],
+        expect=['memory_subject_is_the_item_not_the_action'],
+        note='字母序 action < name，沙箱会拿动作名去匹配规则，而不是被操作的那条记忆',
+    ),
+    dict(
+        name='memory write 不要求 description',
+        file='src/tools/builtin.cpp',
+        edits=[(T5_DESC_OLD, T5_DESC_NEW)],
+        binaries=['test_stage5_tools', 'test_docs'],
+        expect=['memory_write_demands_a_description'],
+        note='空描述的记忆进了索引占位置，模型永远不会去加载它 —— 写了等于没写还白占上下文',
+    ),
+    dict(
+        name='未知 action 先抱怨缺 name',
+        file='src/tools/builtin.cpp',
+        edits=[(T5_ACTION_OLD, T5_ACTION_NEW)],
+        binaries=['test_stage5_tools', 'test_docs'],
+        expect=['memory_rejects_a_bad_action_and_names_the_valid_ones'],
+        note='模型收到「frobnicate 需要 name」会照着补一个 name 再试，而真正错的是动作名',
+    ),
+    dict(
+        name='skill 名字错时不列出可用的',
+        file='src/tools/builtin.cpp',
+        edits=[(T5_NAMES_OLD, T5_NAMES_NEW)],
+        binaries=['test_stage5_tools', 'test_docs'],
+        expect=['skill_lists_the_alternatives'],
+        note='模型是照着索引写的名字，不给候选它只能再猜一次',
+    ),
+    dict(
+        name='memory 未启用时不检查空指针',
+        file='src/tools/builtin.cpp',
+        edits=[(T5_NULLMEM_OLD, T5_NULLMEM_NEW)],
+        binaries=['test_stage5_tools', 'test_docs'],
+        expect=['the_tools_report_rather_than_crash_when_disabled'],
+        note='关掉 memory 的配置下，模型调一次这个工具就是空指针解引用。'
+             '表现是段错误 —— 这是最强的信号，但一条 ✗ 都打不出来，'
+             '所以工具要把"崩溃"和"没抓到"分开，否则看起来一模一样。',
+    ),
+    dict(
+        name='ensure_dirs 不看开关',
+        file='src/config.cpp',
+        edits=[(T5_DIRS_OLD, T5_DIRS_NEW)],
+        binaries=['test_stage5_tools', 'test_docs'],
+        expect=['app_leaves_no_memory_directory_when_the_switch_is_off'],
+        note='在别人的工作区里留下一个永远空着的 .mini-agent/memory',
+    ),
+    # ── Stage 5：Skill 插件 ──────────────────────────────────────────────
+    dict(
+        name='skill 同名时靠后的目录覆盖靠前的',
+        file='src/skills.cpp',
+        edits=[(S_SHADOW_OLD, S_SHADOW_NEW)],
+        binaries=['test_skills'],
+        expect=['an_earlier_directory_shadows_a_later_one'],
+        note='仓库里的约定会被别人机器上的全局配置覆盖',
+    ),
+    dict(
+        name='顺手也接受散落的 .md 当 skill',
+        file='src/skills.cpp',
+        edits=[(S_DIRONLY_OLD, S_DIRONLY_NEW)],
+        binaries=['test_skills'],
+        expect=['a_bare_markdown_file_is_not_a_skill'],
+        note='散落的 .md 会被当成 skill —— 那是 memory 的形态，而 skill 是文件夹，'
+             '它的附属脚本和模板要靠 render() 列出来。'
+             '这条变异必须同时改两行：is_directory 和路径拼接互为冗余，'
+             '单独删掉任何一行，另一行都会把 loose.md 兜住 —— 谁都抓不到。',
+    ),
+    dict(
+        name='没有 description 的 skill 也进索引',
+        file='src/skills.cpp',
+        edits=[(S_DESC_OLD, S_DESC_NEW)],
+        binaries=['test_skills'],
+        expect=['a_skill_without_a_description_is_discarded'],
+        note='空描述的 skill 占着索引位置，模型永远不会去加载它',
+    ),
+    dict(
+        name='name 缺失时用文件名而不是文件夹名兜底',
+        file='src/skills.cpp',
+        edits=[(S_FOLDER_OLD, S_FOLDER_NEW)],
+        binaries=['test_skills'],
+        expect=['a_missing_name_falls_back_to_the_folder_name'],
+        note='每个 SKILL.md 都叫这个名字 —— 所有匿名 skill 会撞成一个',
+    ),
+    dict(
+        name='附属文件清单不排序',
+        file='src/skills.cpp',
+        edits=[(S_SIBS_OLD, S_SIBS_NEW)],
+        binaries=['test_skills'],
+        expect=['sibling_listing_is_stable'],
+        note='render 的字节不稳定；这段会进上下文',
+    ),
+    dict(
+        name='附属文件清单里也列出 SKILL.md',
+        file='src/skills.cpp',
+        edits=[(S_SKIPSELF_OLD, S_SKIPSELF_NEW)],
+        binaries=['test_skills'],
+        expect=['render_lists_the_sibling_files'],
+        note='正文就是它，列出来是噪音',
+    ),
+    dict(
+        name='没有附属文件也加一个空标题',
+        file='src/skills.cpp',
+        edits=[(S_NOSIBS_OLD, S_NOSIBS_NEW)],
+        binaries=['test_skills'],
+        expect=['render_omits_the_listing_when_there_is_nothing_else'],
+        note='一个说「同目录下还有」然后什么都没有的标题',
+    ),
+    dict(
+        name='skill 索引里放正文而不是描述',
+        file='src/skills.cpp',
+        edits=[(S_IDXDESC_OLD, S_IDXDESC_NEW)],
+        binaries=['test_skills'],
+        expect=['the_index_carries_the_description_not_the_body'],
+        note='渐进式披露整个失效，十个 skill 全文每轮都发',
     ),
     # ── Stage 4：上下文压缩与 prompt 组装 ──────────────────────────────
     dict(
@@ -410,14 +643,25 @@ MUTANTS = [
 
 
 def failures(binary, timeout=120):
-    """跑一个测试二进制，返回失败用例名的集合；卡死返回 None。"""
+    """跑一个测试二进制。
+
+    返回 (失败用例名集合, 状态)，状态是 "ok" / "crash" / "hang"。
+
+    ⚠️ 崩溃必须和"没抓到"分开。一个让二进制段错误的变异是**被抓到了**，而且
+       是最强的形式 —— 但崩溃时一条 ✗ 都打不出来，只看 stdout 的话会算成
+       "一个都没红"，和真正的漏网看起来一模一样。踩过一次：把 memory 的空指针
+       检查删掉，测试段错误，工具报"没抓到"。
+    """
     exe = BUILD / binary
     try:
         p = subprocess.run([str(exe)], capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        return None
+        return set(), "hang"
     out = ANSI.sub("", p.stdout)
-    return {m.group(1) for m in re.finditer(r"^✗ (\S+)", out, re.M)}
+    red = {m.group(1) for m in re.finditer(r"^✗ (\S+)", out, re.M)}
+    # 负的退出码 = 被信号杀死（Python 的约定），139 那种是 shell 的算法
+    crashed = p.returncode < 0 or p.returncode >= 128
+    return red, ("crash" if crashed and not red else "ok")
 
 
 def build():
@@ -472,18 +716,22 @@ def run_one(m):
         if not ok:
             return False, "变异后编译不过:\n" + err[-500:]
 
-        red, hung = set(), []
+        red, hung, crashed = set(), [], []
         for b in m["binaries"]:
-            f = failures(b)
-            if f is None:
+            f, status = failures(b)
+            red |= f
+            if status == "hang":
                 hung.append(b)
-            else:
-                red |= f
+            elif status == "crash":
+                crashed.append(b)
 
         missed = [e for e in m["expect"] if not any(e in name for name in red)]
         if hung:
             # 死循环也算抓到了，但形式很差 —— CI 会挂而不是给出一条红
             return True, f"⚠ 抓到了，但表现是**卡死**（{', '.join(hung)}），不是干净的红"
+        if crashed:
+            # 段错误是最强的信号，但一条 ✗ 都打不出来 —— 不能算成漏网
+            return True, f"⚠ 抓到了，但表现是**崩溃**（{', '.join(crashed)}），不是干净的红"
         if missed and m.get("known_gap"):
             return None, "已知未覆盖: " + m["known_gap"]
         if missed:
@@ -552,11 +800,11 @@ def main():
         return 1
     bins = sorted({b for m in picked for b in m["binaries"]})
     baseline = {b: failures(b) for b in bins}
-    if any(v is None or v for v in baseline.values()):
-        print("失败 —— 未变异的代码就有红的用例，先修那个")
-        for b, v in baseline.items():
-            if v:
-                print(f"  {b}: {', '.join(sorted(v))}")
+    if any(status != "ok" or red for red, status in baseline.values()):
+        print("失败 —— 未变异的代码就有红的用例（或崩溃/卡死），先修那个")
+        for b, (red, status) in baseline.items():
+            if red or status != "ok":
+                print(f"  {b}: {status} {', '.join(sorted(red))}")
         return 1
     print("绿")
 
@@ -581,7 +829,7 @@ def main():
     print("\n还原后重新确认基线 ...", end=" ", flush=True)
     ok, _ = build()
     after = {b: failures(b) for b in bins} if ok else None
-    if not ok or any(v is None or v for v in (after or {}).values()):
+    if not ok or any(status != "ok" or red for red, status in (after or {}).values()):
         print("失败 —— 还原没干净，或者某次变异污染了环境")
         return 1
     print("绿")

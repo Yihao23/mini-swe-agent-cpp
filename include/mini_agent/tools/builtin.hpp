@@ -212,6 +212,14 @@ ToolPtr make_todo_tool();
 /// @note The system prompt carries only the index — what exists and when to
 ///       use it. Ten skills inlined in full would put thousands of tokens into
 ///       every turn's fixed cost, most of them irrelevant to the task at hand.
+/// @note read_only and exempt from the gate, like read: it opens files the
+///       operator placed there deliberately, inside directories the config
+///       names.
+/// @warning A wrong name comes back listing what does exist. The model wrote
+///          that name from the index, so telling it the alternatives lets it
+///          correct itself; "no such skill" leaves it guessing again.
+///
+/// 参数：name。
 ToolPtr make_skill_tool();
 
 /// @brief `memory` — search, load, write and delete long-term notes.
@@ -219,6 +227,41 @@ ToolPtr make_skill_tool();
 /// @note Same shape as skills: an index in the system prompt, bodies on
 ///       demand. What differs is who writes them — the agent writes memory,
 ///       a human writes skills.
+/// @note One tool with an `action` rather than four tools. Four would occupy
+///       four slots in every request's tool list — bytes in the cached prefix —
+///       for operations used rarely and never confused with each other.
+///
+/// @warning Not read_only, and it does need authorisation: write and delete
+///          change files. skill differs on both counts.
+/// @warning `write` refuses without a description. A memory with an empty one
+///          takes a slot in the index that the model will never load — written
+///          and useless, while still costing context every turn.
+///
+/// @code{.test}
+/// @setup DocTools t;
+/// @setup Memory mem(t.cfg.memory_dir());
+/// @setup t.ctx.memory = &mem;
+/// @setup const auto memory = make_memory_tool();
+///
+/// // ⚠️ 审查对象是被操作的那条记忆，不是 action。字母序 action < name，
+/// //    默认实现会把 "write" 交给沙箱去匹配规则。
+/// memory->subject(Json{{"action","write"},{"name","user-prefs"}})   ==> "user-prefs"
+///
+/// @setup const Json write_args{{"action","write"},{"name","style"},
+/// @setup                       {"description","提交信息的格式要求"},
+/// @setup                       {"body","Conventional Commits"},{"type","feedback"}};
+/// t.run(memory, write_args).is_error                                ==> false
+/// @setup const auto loaded = t.run(memory, Json{{"action","load"},{"name","style"}});
+/// (loaded.content.find("Conventional Commits") != std::string::npos) ==> true
+///
+/// // description 是必填的
+/// t.run(memory, Json{{"action","write"},{"name","x"},{"body","b"}}).is_error  ==> true
+/// // 未知 action 的报错要点出可用的那几个，而不是抱怨缺 name
+/// @setup const auto bad = t.run(memory, Json{{"action","frobnicate"}});
+/// (bad.content.find("search") != std::string::npos)                 ==> true
+/// @endcode
+///
+/// 参数：action，以及 query / name / description / body / type。
 ToolPtr make_memory_tool();
 
 // --- Stage 6 ---

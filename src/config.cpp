@@ -54,8 +54,10 @@ fs::path Config::mcp_config() const {
 void Config::ensure_dirs() const {
     fs::create_directories(state_dir);
     fs::create_directories(sessions_dir());
-    fs::create_directories(memory_dir());
-    if(!skills_dirs().empty()) fs::create_directories(skills_dirs().front());
+    // ⚠️ 关掉的功能不建目录。在别人的工作区里留下一个永远空着的 .mini-agent/memory
+    //    是种噪音 —— 用户会以为它有用，或者以为自己开着这个功能。
+    if (enable_memory) fs::create_directories(memory_dir());
+    if (enable_skills && !skills_dirs().empty()) fs::create_directories(skills_dirs().front());
 }
 
 void Config::normalize() {

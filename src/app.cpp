@@ -1,7 +1,11 @@
 // 【Stage 7】装配层。⚠️ 成员声明顺序 = 构造顺序，agent_ 必须最后声明。
 #include "mini_agent/app.hpp"
 
+#include <optional>
+
 #include "mini_agent/mcp.hpp"
+#include "mini_agent/memory.hpp"
+#include "mini_agent/skills.hpp"
 #include "mini_agent/subagent.hpp"
 #include "mini_agent/tools/builtin.hpp"
 
@@ -16,6 +20,13 @@ struct App::Impl {
       EventSink on_event;
       std::vector<std::string> warnings;
       Sandbox sandbox;                  // 构造时读 cfg.permission_mode
+
+      // ⚠️ 必须在 ctx 之前声明 —— ctx 里存的是指向它们的裸指针。
+      //    关掉的时候用 nullopt 而不是"建一个空的"：ToolContext 里那些字段是
+      //    指针就是为了表达"这一层可能不存在"，建个空对象反而让工具以为有。
+      std::optional<Memory> memory;
+      std::optional<SkillRegistry> skills;
+
       ToolRegistry registry;
       Session session;
       ToolContext ctx;                  // 指向上面几个
@@ -32,13 +43,21 @@ struct App::Impl {
       if (!llm)                                    // ② 没传就建真的客户端
           llm = std::make_unique<AnthropicClient>(cfg);
       session.bind(cfg.sessions_dir());            // ③ 会话落盘位置
-      for (auto& t : builtin_tools(cfg))            // ④ 注册工具
+
+      // ④ Stage 5：两个渐进式披露的来源。只在开关打开时建 ——
+      //    Memory 的构造会建目录，关掉的时候不该在别人的工作区里留下空文件夹。
+      if (cfg.enable_memory) memory.emplace(cfg.memory_dir());
+      if (cfg.enable_skills) skills.emplace(cfg.skills_dirs());
+
+      for (auto& t : builtin_tools(cfg))            // ⑤ 注册工具
           registry.add(std::move(t));
 
-ctx.cfg      = &cfg;                         // ⑤ 接线
+ctx.cfg      = &cfg;                         // ⑥ 接线
         ctx.sandbox  = &sandbox;
         ctx.session  = &session;
         ctx.registry = &registry;
+        ctx.memory   = memory ? &*memory : nullptr;
+        ctx.skills   = skills ? &*skills : nullptr;
         agent = std::make_unique<Agent>(cfg, *llm, registry, sandbox, session, ctx, on_event);
         
 }
@@ -56,8 +75,8 @@ App::~App() = default;
   ToolRegistry& App::registry()     { return impl_->registry; }
   Sandbox& App::sandbox()           { return impl_->sandbox; }
   LlmClient& App::llm()             { return *impl_->llm; }
-  Memory* App::memory()             { return nullptr; }   // Stage 5
-  SkillRegistry* App::skills()      { return nullptr; }   // Stage 5
+  Memory* App::memory()             { return impl_->memory ? &*impl_->memory : nullptr; }
+  SkillRegistry* App::skills()      { return impl_->skills ? &*impl_->skills : nullptr; }
   BackgroundManager* App::background() { return nullptr; }// Stage 6
   const Config& App::cfg() const    { return impl_->cfg; }
   const std::vector<std::string>& App::warnings() const { return impl_->warnings; }

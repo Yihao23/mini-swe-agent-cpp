@@ -23,9 +23,11 @@
 #include <system_error>
 
 #include "mini_agent/config.hpp"
+#include "mini_agent/memory.hpp"
 #include "mini_agent/process.hpp"
 #include "mini_agent/sandbox.hpp"
 #include "mini_agent/session.hpp"
+#include "mini_agent/skills.hpp"
 
 
 
@@ -607,6 +609,160 @@ class GrepTool final : public Tool {
     }
 };
 
+/// @brief Loads one skill's manual in full.
+///
+/// @note Read-only and exempt from the gate, like read: it opens files the
+///       operator put there on purpose, inside directories the config names.
+class SkillTool final : public Tool {
+  public:
+    std::string_view name() const override { return "skill"; }
+
+    std::string_view description() const override {
+        return "按名字加载一份操作手册的完整内容。"
+               "system prompt 里只有索引（名字 + 什么时候用），正文要用这个工具取。"
+               "任务和某个 skill 的描述对上时就加载它，别凭印象操作。";
+    }
+
+    Json input_schema() const override {
+        return Json{
+            {"type", "object"},
+            {"properties",
+             {{"name", {{"type", "string"}, {"description", "索引里列出的 skill 名字"}}}}},
+            {"required", Json::array({"name"})},
+        };
+    }
+
+    bool read_only() const override { return true; }
+    bool requires_permission() const override { return false; }
+
+    std::string subject(const Json& args) const override {
+        return str_arg(args, "name").value_or(std::string{});
+    }
+
+    ToolResult run(const Json& args, ToolContext& ctx) override {
+        const auto want = str_arg(args, "name");
+        if (!want || want->empty()) return ToolResult::error("缺少 name 参数（必须是字符串）");
+        if (!ctx.skills) return ToolResult::error("skills 未启用");
+
+        const Skill* s = ctx.skills->get(*want);
+        if (!s) {
+            // ⚠️ 列出有哪些 —— 模型是照着索引写的名字，写错时它自己能纠正，
+            //    光说"没有这个 skill"它只能再猜一次。
+            std::string names;
+            for (const Skill* k : ctx.skills->all()) names += (names.empty() ? "" : ", ") + k->name;
+            return ToolResult::error("没有名为 " + *want + " 的 skill。可用: " +
+                                     (names.empty() ? "（一个都没有）" : names));
+        }
+        return ToolResult{.content = s->render(),
+                          .metadata = {{"skill", s->name}, {"path", s->path.string()}}};
+    }
+};
+
+/// @brief Search, load, write and delete long-term memories.
+///
+/// @note One tool with an `action` rather than four tools. Four would take four
+///       slots in every request's tool list — bytes in the cached prefix — for
+///       operations the model uses rarely and never confuses.
+/// @warning `write` and `delete` change files, so this tool is **not**
+///          read_only and does need authorisation, unlike skill.
+class MemoryTool final : public Tool {
+  public:
+    std::string_view name() const override { return "memory"; }
+
+    std::string_view description() const override {
+        return "长期记忆：search / load / write / delete。"
+               "记用户的偏好、项目的约定、已经查明又容易忘的事实；"
+               "别记代码里已有的东西（结构、历史、CLAUDE.md）。"
+               "一条记一件事，description 写「什么时候该用它」而不是「它是什么」。";
+    }
+
+    Json input_schema() const override {
+        return Json{
+            {"type", "object"},
+            {"properties",
+             {{"action", {{"type", "string"},
+                          {"enum", Json::array({"search", "load", "write", "delete"})},
+                          {"description", "要做什么"}}},
+              {"query", {{"type", "string"}, {"description", "search 用：关键词"}}},
+              {"name", {{"type", "string"}, {"description", "load/write/delete 用：记忆名"}}},
+              {"description", {{"type", "string"}, {"description", "write 用：什么时候该用它"}}},
+              {"body", {{"type", "string"}, {"description", "write 用：正文"}}},
+              {"type", {{"type", "string"},
+                        {"enum", Json::array({"user", "feedback", "project", "reference"})},
+                        {"description", "write 用：记忆类型"}}}}},
+            {"required", Json::array({"action"})},
+        };
+    }
+
+    bool read_only() const override { return false; }            // write/delete 会改文件
+    bool requires_permission() const override { return true; }
+
+    /// ⚠️ 必须 override：字母序是 action < body < description < name < query < type，
+    ///    默认实现会把 action 交给沙箱。审查对象应该是被操作的那条记忆。
+    std::string subject(const Json& args) const override {
+        if (const auto n = str_arg(args, "name")) return *n;
+        return str_arg(args, "action").value_or(std::string{});
+    }
+
+    ToolResult run(const Json& args, ToolContext& ctx) override {
+        const auto action = str_arg(args, "action");
+        if (!action) return ToolResult::error("缺少 action 参数（search/load/write/delete）");
+        if (!ctx.memory) return ToolResult::error("memory 未启用");
+        Memory& mem = *ctx.memory;
+
+        if (*action == "search") {
+            const auto q = str_arg(args, "query");
+            if (!q || q->empty()) return ToolResult::error("search 需要 query");
+            const auto hits = mem.search(*q, 5);
+            if (hits.empty()) return ToolResult{.content = "没有匹配 " + *q + " 的记忆"};
+            std::string out;
+            for (const auto& h : hits) out += h.render() + "\n\n";
+            return ToolResult{.content = std::move(out), .metadata = {{"hits", hits.size()}}};
+        }
+
+        // ⚠️ 先校验 action，再要 name。反过来的话一个拼错的 action 收到的是
+        //    "frobnicate 需要 name" —— 模型会照着补一个 name 再试一次，
+        //    而真正错的是动作名，它从这句话里看不出来。
+        if (*action != "load" && *action != "write" && *action != "delete")
+            return ToolResult::error("未知 action: " + *action + "（search/load/write/delete）");
+
+        const auto name = str_arg(args, "name");
+        if (!name || name->empty()) return ToolResult::error(*action + " 需要 name");
+
+        if (*action == "load") {
+            const auto item = mem.get(*name);
+            if (!item) return ToolResult::error("没有名为 " + *name + " 的记忆");
+            return ToolResult{.content = item->render()};
+        }
+        if (*action == "delete") {
+            // 删除和写入一样重要：一条后来发现是错的记忆，不删掉会一直被召回。
+            if (!mem.remove(*name)) return ToolResult::error("没有名为 " + *name + " 的记忆");
+            return ToolResult{.content = "已删除 " + *name};
+        }
+        if (*action == "write") {
+            const auto desc = str_arg(args, "description");
+            const auto body = str_arg(args, "body");
+            // ⚠️ description 必填。没有它这条记忆会进索引、占位置，而模型看到
+            //    一条空描述永远不会去加载它 —— 写了等于没写，还占着上下文。
+            if (!desc || desc->empty())
+                return ToolResult::error("write 需要 description（写「什么时候该用它」）");
+            if (!body || body->empty()) return ToolResult::error("write 需要 body");
+            const auto p = mem.write(*name, *desc, *body, memory_type_of(args));
+            return ToolResult{.content = "已记住 " + *name, .metadata = {{"path", p.string()}}};
+        }
+        return ToolResult::error("未知 action: " + *action);   // 上面已挡住，这里是兜底
+    }
+
+  private:
+    static MemoryType memory_type_of(const Json& args) {
+        const auto t = str_arg(args, "type").value_or(std::string{"reference"});
+        if (t == "user") return MemoryType::User;
+        if (t == "feedback") return MemoryType::Feedback;
+        if (t == "project") return MemoryType::Project;
+        return MemoryType::Reference;
+    }
+};
+
 /// @brief Runs one shell command through run_shell.
 ///
 /// @note Makes no permission decision of its own. By the time run() is called
@@ -696,8 +852,8 @@ ToolPtr make_glob_tool() { return std::make_shared<GlobTool>(); }
 ToolPtr make_grep_tool() { return std::make_shared<GrepTool>(); }
 ToolPtr make_bash_tool() { return std::make_shared<BashTool>(); }
 ToolPtr make_todo_tool() { todo("Stage 4: todo —— 覆盖式提交，每轮由 reminder 回灌"); }
-ToolPtr make_skill_tool() { todo("Stage 5: skill —— 按名字加载完整手册"); }
-ToolPtr make_memory_tool() { todo("Stage 5: memory —— search/load/write/delete"); }
+ToolPtr make_skill_tool() { return std::make_shared<SkillTool>(); }
+ToolPtr make_memory_tool() { return std::make_shared<MemoryTool>(); }
 ToolPtr make_task_tool() { todo("Stage 6: task —— 派一个子 agent"); }
 ToolPtr make_task_graph_tool() { todo("Stage 6: task_graph —— 派一张带依赖的图"); }
 ToolPtr make_bash_output_tool() { todo("Stage 6: bash_output"); }
@@ -713,11 +869,11 @@ std::vector<ToolPtr> builtin_tools(const Config& cfg) {
     v.push_back(make_grep_tool());
     v.push_back(make_bash_tool());
 
-    // TODO(Stage 4/5/6): 下面这些工厂现在还是 todo()，一调就抛。开关默认为 true，
+    if (cfg.enable_memory) v.push_back(make_memory_tool());
+    if (cfg.enable_skills) v.push_back(make_skill_tool());
+
+    // TODO(Stage 4/6): 下面这些工厂现在还是 todo()，一调就抛。开关默认为 true，
     //   所以要等对应 Stage 写完再打开，否则默认配置下 agent 直接起不来。
-    (void)cfg;
-    // if (cfg.enable_memory) v.push_back(make_memory_tool());   // Stage 5
-    // if (cfg.enable_skills) v.push_back(make_skill_tool());    // Stage 5
     // if (cfg.enable_subagents) v.push_back(make_task_tool());  // Stage 6
     return v;
 }

@@ -12,6 +12,10 @@ Every `expr ==> expected` line becomes CHECK(expr == expected). @setup lines are
 emitted verbatim, in order, before the assertions of that block. Plain @code
 blocks are left alone — they render in the docs and are not compiled.
 
+⚠️ 一条断言必须写在**一行**里。跨行的话前半行会被当成一条独立语句发出去，
+生成的文件编译不过 —— 报错指向 test_docs.cpp，离真正的原因（某个头文件里的
+示例换行了）很远。表达式太长就先用 @setup 接住结果，再断言那个变量。
+
 The point is not to save writing tests. It is that a documented example which
 is never executed rots silently: the code changes, the tests go red, and the
 comment quietly becomes a lie.

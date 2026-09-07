@@ -130,6 +130,13 @@ class Memory {
 
   private:
     fs::path root_;
+
+    /// @brief Parsed items, loaded lazily.
+    /// @note mutable, which is why rebuild_index() and index_text() can be
+    ///       const: the cache is not state the caller owns, it is a view of
+    ///       what is on disk.
+    mutable std::vector<MemoryItem> index_;
+    mutable bool loaded_ = false;
 };
 
 /// @brief Read one memory file.
