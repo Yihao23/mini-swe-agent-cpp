@@ -89,8 +89,20 @@ bool is_skipped_dir(const std::string& name) {
 /// @note 副作用是 `*.cpp` 和 `**/*.cpp` 在这里等价 —— 都能匹配 src/a/b.cpp。
 ///       对 agent 来说这是想要的：模型写 `*.cpp` 时几乎总是指"所有 cpp 文件"，
 ///       而不是"仅顶层的"。和 Sandbox::Rule::matches 的取舍一致。
+///
+/// ⚠️ `**/` 必须能匹配**零个**目录，所以匹配失败时要把它整个删掉再试一次。
+///    fnmatch 眼里 `**` 只是两个 `*` 连写、等于一个 `*`，于是 `src/**/*.cpp`
+///    被拆成 "src/" + `*` + "/" + "*.cpp" —— 那个斜杠是字面量，必须存在。
+///    结果 src/tools/builtin.cpp 匹配得上，src/app.cpp 匹配不上。
+///    bash 的 globstar、ripgrep、Claude Code 都把 `**/` 当成「零个或多个目录」，
+///    模型也是照这个预期写的。这个 bug 是 agent 自己跑起来之后发现的：
+///    它拿 src/**/*.cpp 只捞回一个文件，于是自己换了两个模式重试。
 bool glob_match(const std::string& pattern, const std::string& rel) {
-    return ::fnmatch(pattern.c_str(), rel.c_str(), 0) == 0;
+    if (::fnmatch(pattern.c_str(), rel.c_str(), 0) == 0) return true;
+    // 每次去掉一个 `**/` 再试；有多个就逐个递归，一定会收敛。
+    const auto at = pattern.find("**/");
+    if (at == std::string::npos) return false;
+    return glob_match(std::string(pattern).erase(at, 3), rel);
 }
 
 /// 从 root 往下走，对每个**文件**调 fn(相对路径, 绝对路径)。

@@ -207,6 +207,19 @@ MUTANTS = [
         note="模型问「有哪些 cpp」时要的几乎总是最近动过的，字母序把 app.cpp 排前面",
     ),
     dict(
+        name="glob 的 **/ 不能匹配零个目录",
+        file="src/tools/builtin.cpp",
+        edits=[("""    if (::fnmatch(pattern.c_str(), rel.c_str(), 0) == 0) return true;
+    // 每次去掉一个 `**/` 再试；有多个就逐个递归，一定会收敛。
+    const auto at = pattern.find("**/");
+    if (at == std::string::npos) return false;
+    return glob_match(std::string(pattern).erase(at, 3), rel);""",
+                "    return ::fnmatch(pattern.c_str(), rel.c_str(), 0) == 0;")],
+        binaries=["test_search_tools"],
+        expect=["globstar_matches_zero_directories"],
+        note="src/**/*.cpp 会漏掉 src/ 正下方的所有文件 —— agent 自己跑起来后发现的",
+    ),
+    dict(
         name="遍历不跳过 build/ .git/ 等目录",
         file="src/tools/builtin.cpp",
         edits=[("            if (is_skipped_dir(p.filename().string())) it.disable_recursion_pending();",

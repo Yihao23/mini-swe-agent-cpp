@@ -121,6 +121,25 @@ TEST(glob_star_crosses_directories) {
     CHECK(has(f.do_glob({{"pattern", "a/**/deep.cpp"}}), "a/b/c/deep.cpp"));
 }
 
+TEST(globstar_matches_zero_directories) {
+    Fixture f;
+    f.seed("src/flat.cpp");           // src/ 正下方，中间没有目录
+    f.seed("src/tools/nested.cpp");   // 中间有一层
+
+    // ⚠️ 这是 agent 自己跑起来之后发现的 bug。fnmatch 眼里 `**` 只是两个 `*`
+    //    连写，于是 src/**/*.cpp 被拆成 "src/" + * + "/" + "*.cpp" —— 那个
+    //    斜杠是字面量，必须存在。结果只捞回嵌套的那个，漏掉 src/ 正下方的 20 个。
+    const auto r = f.do_glob({{"pattern", "src/**/*.cpp"}});
+    CHECK_MSG(has(r, "src/flat.cpp"),
+              "`**/` 必须能匹配零个目录 —— bash globstar、ripgrep 都是这个语义，"
+              "模型也是照这个预期写的");
+    CHECK(has(r, "src/tools/nested.cpp"));
+
+    // 上一条用嵌套文件是测不出来的：中间有目录时，修复前后都匹配。
+    CHECK_MSG(has(f.do_glob({{"pattern", "**/flat.cpp"}}), "src/flat.cpp"),
+              "开头的 **/ 同理，要能跨过 src/ 这一层");
+}
+
 TEST(glob_sorts_newest_first) {
     Fixture f;
     // ⚠️ 名字要让两种排序**打架**。用 old.cpp / new.cpp 是没用的：
