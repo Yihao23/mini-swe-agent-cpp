@@ -1,4 +1,6 @@
 #pragma once
+/// @file
+/// @brief Skills — folders holding a manual for one kind of job (Stage 5).
 //
 // 【Stage 5】Skill 插件 —— 用文件夹装的"专项操作手册"。
 //

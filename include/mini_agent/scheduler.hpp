@@ -1,4 +1,6 @@
 #pragma once
+/// @file
+/// @brief Executes a dependency graph of tasks, several at a time (Stage 6).
 //
 // 【Stage 6】任务调度 —— 把一个大目标拆成带依赖的任务图，按拓扑序 + 优先级并发执行。
 //

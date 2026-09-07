@@ -1,4 +1,6 @@
 #pragma once
+/// @file
+/// @brief The tool abstraction — a JSON Schema for the model, a run() for you (Stage 2).
 //
 // 【Stage 2】工具抽象 —— 一个工具 = JSON Schema（给模型看）+ run()（给你跑）。
 //

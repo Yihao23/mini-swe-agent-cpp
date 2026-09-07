@@ -1,4 +1,6 @@
 #pragma once
+/// @file
+/// @brief Normalises a model response into blocks and tool calls (Stage 1).
 //
 // 【Stage 1】输出解析 —— 把模型响应归一化成两样东西：
 //   1. 事件流：给 UI / 日志用的扁平结构

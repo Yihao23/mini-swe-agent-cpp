@@ -1,0 +1,85 @@
+# Doxygen 配置。跑法：
+#     cmake --build build --target docs        （或直接 `doxygen` in repo root）
+# 输出在 docs/api/html/index.html
+#
+# ── 为什么这些开关是这样的 ──────────────────────────────────────────────────
+#
+# 这份配置的目的不是"生成好看的文档"，是**验证注释本身没写错**。
+# @param 拼错了参数名、函数漏了参数说明、@ref 指向不存在的符号 —— 这些
+# 错误现在没有任何机制会发现，和"文档过期"是同一类问题。所以：
+#
+#   EXTRACT_ALL          = NO    没写注释的就别出现，别用自动摘要糊过去
+#   WARN_IF_DOC_ERROR    = YES   @param 拼错参数名、@ref 指不到东西 → 报
+#   WARN_NO_PARAMDOC     = YES   写了 @param 但漏了某个参数 → 报
+#   WARN_AS_ERROR = FAIL_ON_WARNINGS   报了就是失败，不是"仅供参考"
+#
+# ── 为什么 WARN_IF_UNDOCUMENTED 是 NO ───────────────────────────────────────
+#
+# 打开它现在会报 264 条「还没写文档」，把 2 条真正的错误淹掉 —— 信噪比 132:1，
+# 结果就是没人看。文档覆盖率是个渐进目标（loop / app / config / executor /
+# llm / mcp / memory / skills / subagent 还没做），不该和"已有文档写错了"
+# 这种当场可修的问题混在一个开关里。
+#
+# 想看覆盖率缺口：
+#     doxygen -d Preprocessor 2>/dev/null; (cat Doxyfile; echo WARN_IF_UNDOCUMENTED=YES) | doxygen -
+#
+# 只扫 include/。src/ 里的类全在匿名命名空间里（builtin.hpp 开头讲了为什么），
+# 要提取它们得开 EXTRACT_ANON_NSPACES + EXTRACT_STATIC，而那会把一堆实现细节
+# 当成 API 呈现出来 —— 那些注释是写给改代码的人的，不是给调用者的。
+
+PROJECT_NAME           = "mini-swe-agent-cpp"
+PROJECT_BRIEF          = "A SWE agent skeleton in C++23 — headers are the contract"
+OUTPUT_DIRECTORY       = docs/api
+CREATE_SUBDIRS         = NO
+
+# ⚠️ 只喂头文件，不喂 .md。
+#
+# 把 README / docs 也放进来的话，doxygen 会用自己的 markdown 解析器处理它们，
+# 而它和 GitHub 的规则不一样：`#pragma` 会被当成符号引用（哪怕在代码围栏里），
+# 跨语言链接 [English](testing.md) 会被当成 \ref。为了让 doxygen 不报错去改
+# markdown 的写法，等于让 GitHub 上的渲染迁就一个没人从这儿读文档的地方。
+#
+# 这个 target 的价值在校验头文件里的注释，不在生成一个网站。
+INPUT                  = include
+RECURSIVE              = YES
+FILE_PATTERNS          = *.hpp *.md
+
+# --- 提取什么 --------------------------------------------------------------
+EXTRACT_ALL            = NO
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = NO
+EXTRACT_ANON_NSPACES   = NO
+HIDE_UNDOC_MEMBERS     = NO      # 未文档化的成员仍列出（但不编造摘要），便于发现遗漏
+
+# --- 警告：这份配置的重点 ---------------------------------------------------
+QUIET                  = YES
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = YES
+WARN_IF_INCOMPLETE_DOC = YES
+WARN_NO_PARAMDOC       = YES     # 有 @param 但漏了某个参数 → 报
+WARN_AS_ERROR          = FAIL_ON_WARNINGS
+WARN_LOGFILE           =         # 空 = 输出到 stderr
+
+# --- 语言 ------------------------------------------------------------------
+OUTPUT_LANGUAGE        = English
+JAVADOC_AUTOBRIEF      = NO
+MARKDOWN_SUPPORT       = YES
+BUILTIN_STL_SUPPORT    = YES
+
+# --- 输出 ------------------------------------------------------------------
+GENERATE_HTML          = YES
+HTML_OUTPUT            = html
+GENERATE_LATEX         = NO
+GENERATE_TREEVIEW      = YES
+DISABLE_INDEX          = NO
+SOURCE_BROWSER         = YES
+STRIP_CODE_COMMENTS    = NO      # 教学项目：注释就是内容，别在源码视图里剥掉
+
+# --- 预处理 ----------------------------------------------------------------
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = NO
+SEARCH_INCLUDES        = NO
+
+# --- 图 --------------------------------------------------------------------
+HAVE_DOT               = NO      # 不引入 graphviz 依赖；这个项目只有两个依赖

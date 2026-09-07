@@ -1,4 +1,6 @@
 #pragma once
+/// @file
+/// @brief Decides whether one tool call may proceed (Stage 3).
 //
 // 【Stage 3】沙箱 / 权限层 —— 决定"这次工具调用允不允许跑"。
 //

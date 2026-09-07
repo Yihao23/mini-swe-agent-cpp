@@ -1,4 +1,6 @@
 #pragma once
+/// @file
+/// @brief Conversation state: history, persistence, compaction (Stage 1 + 4).
 //
 // 【Stage 1 + Stage 4】会话状态 —— 历史 + 落盘 + 上下文压缩。
 //

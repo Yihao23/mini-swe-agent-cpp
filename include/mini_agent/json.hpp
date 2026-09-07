@@ -1,4 +1,6 @@
 #pragma once
+/// @file
+/// @brief The single place the JSON type is allowed to appear.
 //
 // JSON 只在这一个文件里露脸一次。
 //

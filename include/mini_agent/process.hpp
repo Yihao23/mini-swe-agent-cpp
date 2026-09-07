@@ -1,4 +1,6 @@
 #pragma once
+/// @file
+/// @brief Running a subprocess with a timeout — the most systems-level file here (Stage 2).
 //
 // 【Stage 2】带超时的子进程执行 —— Python 一行 subprocess.run(timeout=) 的东西，
 // C++ 要你自己写。这是整个项目里最"系统编程"的一块，也是最值得亲手写一遍的。

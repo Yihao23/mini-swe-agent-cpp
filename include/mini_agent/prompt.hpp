@@ -1,4 +1,6 @@
 #pragma once
+/// @file
+/// @brief Assembles what the model sees at the start of every turn (Stage 4).
 //
 // 【Stage 4】输入 prompt 组装 —— 决定"模型每一轮看到什么"。
 //

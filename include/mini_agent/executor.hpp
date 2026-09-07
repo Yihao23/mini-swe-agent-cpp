@@ -1,4 +1,6 @@
 #pragma once
+/// @file
+/// @brief Runs a batch of tool_use blocks: authorise, parallelise, time out (Stage 2).
 //
 // 【Stage 2】执行器 —— 拿到一批 tool_use，负责授权、并发、超时、截断、错误封装。
 //

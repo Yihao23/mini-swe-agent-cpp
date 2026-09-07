@@ -1,4 +1,6 @@
 #pragma once
+/// @file
+/// @brief Terminal front end — event rendering, REPL, slash commands (Stage 7).
 //
 // 【Stage 7】终端界面 —— 事件渲染 + REPL + 斜杠命令 + 权限确认。
 //

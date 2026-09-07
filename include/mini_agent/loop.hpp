@@ -1,4 +1,6 @@
 #pragma once
+/// @file
+/// @brief The agent loop — the heart of the project, and one of its shortest files (Stage 1).
 //
 // 【Stage 1】Agent 主循环 —— 整个项目的心脏，也应该是最短的文件之一。
 //

@@ -1,4 +1,6 @@
 #pragma once
+/// @file
+/// @brief The data model for conversation history (Stage 0).
 //
 // 【Stage 0】对话历史的数据模型。
 //

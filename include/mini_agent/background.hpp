@@ -1,4 +1,6 @@
 #pragma once
+/// @file
+/// @brief Long-running commands that must not block the main loop (Stage 6).
 //
 // 【Stage 6】后台任务 —— 不阻塞主循环的长命令（dev server、watch、跑全套测试）。
 //

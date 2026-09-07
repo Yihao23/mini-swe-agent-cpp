@@ -48,6 +48,7 @@ mini-swe-agent-cpp/
 ├── include/mini_agent/     The contracts. Every header opens with *why* it is
 │                           shaped that way — that is documentation, not decoration
 ├── src/                    The work. Unimplemented bodies call todo("Stage N: ...")
+├── Doxyfile                Comment checking — a wrong @param or a dead @ref fails
 ├── tools/
 │   ├── gen_doc_tests.py    Lifts @code{.test} blocks out of headers into assertions
 │   └── mutate.py           Mutation testing — do the tests catch what they name?
@@ -117,7 +118,8 @@ Stage 4+ ░░░░░░░░░░░░░░░░░░░░
 Builds clean under `-Wall -Wextra -Wpedantic`.
 
 ```bash
-python3 tools/mutate.py     # put the bugs back; check the right cases go red
+cmake --build build --target docs   # build the API docs, checking the comments themselves
+python3 tools/mutate.py             # put the bugs back; check the right cases go red
 ```
 
 See [docs/testing.md](docs/testing.md).

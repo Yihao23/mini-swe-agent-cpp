@@ -3,3 +3,4 @@ compile_commands.json
 .mini-agent/
 .cache/
 __pycache__/
+docs/api/

@@ -1,4 +1,6 @@
 #pragma once
+/// @file
+/// @brief MCP client over stdio — external processes contributing tools (Stage 7).
 //
 // 【Stage 7】MCP 客户端（stdio 传输）—— 把外部进程提供的工具接进本 agent 的工具表。
 //

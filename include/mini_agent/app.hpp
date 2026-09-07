@@ -1,4 +1,6 @@
 #pragma once
+/// @file
+/// @brief Assembly — wires a dozen modules into a runnable agent (Stage 7).
 //
 // 【Stage 7】装配层 —— 把十几个模块接成一个能跑的 agent。
 //

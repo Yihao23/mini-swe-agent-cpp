@@ -1,4 +1,6 @@
 #pragma once
+/// @file
+/// @brief Knowledge that outlives a session, stored as Markdown (Stage 5).
 //
 // 【Stage 5】长期记忆 —— 跨会话存活的知识，存成一堆 Markdown 文件。
 //

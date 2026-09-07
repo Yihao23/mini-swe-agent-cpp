@@ -1,4 +1,6 @@
 #pragma once
+/// @file
+/// @brief Factory functions for the builtin tools (Stage 2/5/6).
 //
 // 【Stage 2/5/6】内置工具的工厂函数。
 //

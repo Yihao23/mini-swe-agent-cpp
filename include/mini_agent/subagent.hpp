@@ -1,4 +1,6 @@
 #pragma once
+/// @file
+/// @brief Sub-agents: single-use, context-isolated workers that return a conclusion (Stage 6).
 //
 // 【Stage 6】多 agent —— 子 agent 是"一次性的、上下文隔离的、只返回结论的"工人。
 //

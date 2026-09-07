@@ -8,6 +8,7 @@ Three layers, each answering a different question.
 |---|---|---|---|
 | Unit tests | `tests/test_*.cpp` | Is the code correct? | `ctest` |
 | Documented examples | `@code{.test}` in headers | Is the documentation still true? | same (builds `test_docs`) |
+| Doc build | `Doxyfile` | Are the comments themselves wrong? | `cmake --build build --target docs` |
 | Mutation testing | `tools/mutate.py` | **Are the tests worth anything?** | `python3 tools/mutate.py` |
 
 The third layer is the one that gets skipped, and the one this project has got
@@ -84,7 +85,62 @@ Its one job is this:
 
 Having a machine watch is the only thing that reliably works.
 
-## 3. Mutation testing
+## 3. The doc build
+
+```bash
+cmake --build build --target docs      # output in docs/api/html/index.html
+```
+
+This layer does not ask whether the documentation is *true* — that is the layer
+above. It asks whether the comments are **malformed**:
+
+| Mistake | What it reports |
+|---|---|
+| `@param` naming a parameter that does not exist | `argument 'workdir' of command @param is not found in the argument list of run_shell(...)` |
+| A parameter with no `@param` | `The following parameter ... is not documented: parameter 'timeout'` |
+| `@ref` to a symbol that is not there | `unable to resolve reference to 'NoSuchSymbol'` |
+
+`WARN_AS_ERROR = FAIL_ON_WARNINGS`, so a report is a failure. Without doxygen
+installed the target simply does not exist; it is not a build dependency.
+
+`INPUT` is `include` alone — not the READMEs, not this file. Doxygen's markdown
+parser does not follow GitHub's rules (`#pragma` becomes a symbol reference even
+inside a fence, a cross-language link becomes a `\ref`), and bending the markdown
+to keep it quiet would mean making the GitHub rendering worse to satisfy a site
+nobody reads the docs from. This target is worth having for the header comments.
+
+### Every header needs `@file`
+
+⚠️ **A free function is extracted only when the file it lives in is itself
+documented.**
+
+Adding this configuration is what revealed that none of the 21 headers had
+`@file`, so the documentation on `run_shell`, `make_*_tool`, `load_config`,
+`builtin_tools` and `kDangerous` reached no generated page at all — hundreds of
+lines that did not exist as far as doxygen was concerned, and which the `@param`
+checking therefore never touched.
+
+Every header now opens with:
+
+```cpp
+#pragma once
+/// @file
+/// @brief Running a subprocess with a timeout — the most systems-level file here (Stage 2).
+```
+
+### Why `WARN_IF_UNDOCUMENTED` is NO
+
+Turning it on reports 264 "not documented" against 2 real errors — 132:1, which
+means nobody reads it. Documentation coverage is a gradual goal (`loop`, `app`,
+`config`, `executor`, `llm`, `mcp`, `memory`, `skills`, `subagent` are still
+undone) and does not belong behind the same switch as a mistake that can be
+fixed on the spot. To see the coverage gap:
+
+```bash
+(cat Doxyfile; echo WARN_IF_UNDOCUMENTED=YES) | doxygen -
+```
+
+## 4. Mutation testing
 
 ### The problem
 
@@ -226,6 +282,7 @@ Mutation testing here has not only found vacuous tests. It found two real bugs:
 
 ```bash
 cmake --build build -j4 && ctest --test-dir build --output-on-failure
+cmake --build build --target docs
 python3 tools/mutate.py
 ```
 

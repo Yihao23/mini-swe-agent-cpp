@@ -1,4 +1,6 @@
 #pragma once
+/// @file
+/// @brief The only place the agent talks to a model (Stage 1).
 //
 // 【Stage 1】LLM 客户端 —— agent 唯一和模型通信的地方。
 //

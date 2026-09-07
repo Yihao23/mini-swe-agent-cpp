@@ -1,4 +1,6 @@
 #pragma once
+/// @file
+/// @brief Every knob, in one aggregate (Stage 0).
 //
 // 【Stage 0】配置 —— 所有旋钮集中在一个聚合类型里。
 //

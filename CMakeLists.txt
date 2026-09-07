@@ -60,6 +60,27 @@ add_executable(mini-agent src/main.cpp)
 target_link_libraries(mini-agent PRIVATE mini_agent_core)
 
 # ---------------------------------------------------------------------------
+# API 文档：cmake --build build --target docs
+#
+# 这个 target 的目的不是"生成好看的网页"，是**验证注释本身没写错**：@param
+# 拼错参数名、漏了某个参数、@ref 指向不存在的符号 —— Doxyfile 里
+# WARN_AS_ERROR=FAIL_ON_WARNINGS，报了就是失败。没有它，这类错误没有任何
+# 机制会发现，和"文档过期"是同一类问题。
+#
+# 不进 ALL：doxygen 不是构建依赖，没装也该能编译和跑测试。
+# ---------------------------------------------------------------------------
+find_program(DOXYGEN_EXECUTABLE doxygen)
+if(DOXYGEN_EXECUTABLE)
+  add_custom_target(docs
+    COMMAND ${DOXYGEN_EXECUTABLE} ${CMAKE_SOURCE_DIR}/Doxyfile
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "生成 API 文档并校验注释 (docs/api/html/index.html)"
+    VERBATIM)
+else()
+  message(STATUS "未找到 doxygen —— target 'docs' 不可用")
+endif()
+
+# ---------------------------------------------------------------------------
 # 文档测试：从头文件的 @code{.test} 块生成 tests/test_docs.cpp
 #
 # 生成物是**签入仓库**的，所以没装 Python 也能正常构建。装了的话，任何一个

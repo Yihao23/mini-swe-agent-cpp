@@ -8,6 +8,7 @@
 |---|---|---|---|
 | 单元测试 | `tests/test_*.cpp` | 代码对不对？ | `ctest` |
 | 文档示例 | 头文件的 `@code{.test}` | 文档还准不准？ | 同上（生成 `test_docs`） |
+| 文档构建 | `Doxyfile` | 注释本身写错了吗？ | `cmake --build build --target docs` |
 | 变异测试 | `tools/mutate.py` | **测试本身有没有用？** | `python3 tools/mutate.py` |
 
 第三层是这个项目里最容易被跳过、也最值得做的一层。
@@ -76,7 +77,57 @@ CHECK_MSG((run_shell("echo hello", wd, 5s).output) == ("hello\n"),
 
 ---
 
-## 三、变异测试
+## 三、文档构建
+
+```bash
+cmake --build build --target docs      # 输出在 docs/api/html/index.html
+```
+
+它检查的不是「文档准不准」（那是上一层的事），而是**注释本身有没有写错**：
+
+| 错误 | 报什么 |
+|---|---|
+| `@param` 拼错参数名 | `argument 'workdir' of command @param is not found in the argument list of run_shell(...)` |
+| 漏了某个参数的 `@param` | `The following parameter ... is not documented: parameter 'timeout'` |
+| `@ref` 指向不存在的符号 | `unable to resolve reference to 'NoSuchSymbol'` |
+
+`Doxyfile` 里 `WARN_AS_ERROR = FAIL_ON_WARNINGS`，报了就是失败。没装 doxygen
+的话 target 不存在，构建和测试照跑 —— 它不是构建依赖。
+
+`INPUT` 只有 `include`，不含 README 和这份文档。doxygen 的 markdown 解析器和
+GitHub 的规则不一样（`#pragma` 会被当成符号引用，跨语言链接会被当成 `\ref`），
+为了让它不报错去改 markdown 的写法，等于让 GitHub 上的渲染迁就一个没人从那儿
+读文档的地方。这个 target 的价值在校验头文件注释，不在生成网站。
+
+### 每个头文件都要有 `@file`
+
+⚠️ **自由函数（不在类里的）只有在文件本身被文档化时才会被 doxygen 提取。**
+
+加这份配置的时候才发现，21 个头文件一个都没有 `@file`，于是
+`run_shell`、`make_*_tool`、`load_config`、`builtin_tools`、`kDangerous`
+这些的文档**一条都没进生成的页面** —— 写了几百行，全在文档里不存在，
+`@param` 校验也就完全没跑到它们身上。
+
+所以每个头文件现在都以这三行开头：
+
+```cpp
+#pragma once
+/// @file
+/// @brief Running a subprocess with a timeout — the most systems-level file here (Stage 2).
+```
+
+### `WARN_IF_UNDOCUMENTED` 为什么是 NO
+
+打开它现在会报 264 条「还没写文档」，把 2 条真错误淹掉 —— 信噪比 132:1，
+结果就是没人看。文档覆盖率是渐进目标（`loop` / `app` / `config` / `executor` /
+`llm` / `mcp` / `memory` / `skills` / `subagent` 还没做），不该和「已有文档
+写错了」这种当场可修的问题共用一个开关。想看覆盖率缺口：
+
+```bash
+(cat Doxyfile; echo WARN_IF_UNDOCUMENTED=YES) | doxygen -
+```
+
+## 四、变异测试
 
 ### 问题
 
@@ -207,6 +258,7 @@ dict(
 
 ```bash
 cmake --build build -j4 && ctest --test-dir build --output-on-failure
+cmake --build build --target docs
 python3 tools/mutate.py
 ```
 

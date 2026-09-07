@@ -36,6 +36,7 @@ mini-swe-agent-cpp/
 ├── include/mini_agent/     契约。每个头文件顶部讲清楚"为什么这么设计" ——
 │                           那是文档的一部分，不是装饰
 ├── src/                    你的战场。未实现的函数体调用 todo("Stage N: ...")
+├── Doxyfile                注释校验用（@param 拼错、@ref 断链会当场报错）
 ├── tools/
 │   ├── gen_doc_tests.py    把头文件的 @code{.test} 抽成真正的断言
 │   └── mutate.py           变异测试：验证测试真的抓得到 bug
@@ -103,7 +104,8 @@ Stage 4+ ░░░░░░░░░░░░░░░░░░░░
 `-Wall -Wextra -Wpedantic` 下零警告。
 
 ```bash
-python3 tools/mutate.py     # 把 bug 种回去，看该红的用例会不会红
+cmake --build build --target docs   # 生成 API 文档，顺便校验注释本身没写错
+python3 tools/mutate.py             # 把 bug 种回去，看该红的用例会不会红
 ```
 
 见 [docs/testing.zh-CN.md](docs/testing.zh-CN.md)。
