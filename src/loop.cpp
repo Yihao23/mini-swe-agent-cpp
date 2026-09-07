@@ -2,6 +2,8 @@
 
 #include "mini_agent/loop.hpp"
 
+#include <format>
+
 #include "mini_agent/parser.hpp"
 #include "mini_agent/prompt.hpp"
 #include "mini_agent/sandbox.hpp"
@@ -16,22 +18,21 @@ Agent::Agent(const Config& cfg, LlmClient& llm, ToolRegistry& registry, Sandbox&
       on_event_(std::move(on_event)), opts_(std::move(opts)), executor_(registry, ctx, on_event_) {}
 
 std::vector<SystemBlock> Agent::build_system_blocks() const {
-    // ⚠️ 这段文本必须逐字节稳定。它渲染在请求最前面，变一个字节 prompt 缓存
-    //    就整个作废 —— 所以绝不能塞时间戳、随机 id、每轮都变的内容。
-    //    TODO(Stage 4): 换成 prompt.cpp 里组装的多块版本
-    SystemBlock b;
-    b.text =
-        "You are a software engineering agent working in " + cfg_.workdir.string() + ".\n"
-        "Use the provided tools to inspect and modify the codebase.\n"
-        "Read before you edit. Prefer small, verifiable steps. Be concise.";
-    if (!opts_.identity.empty()) b.text = opts_.identity + "\n\n" + b.text;
-    if (!opts_.system_extra.empty()) b.text += "\n\n" + opts_.system_extra;
-    b.cache_breakpoint = true;   // 打在最后一块上，一次缓存 tools + system
-    return {std::move(b)};
+    // ⚠️ 这段必须逐字节稳定 —— 它渲染在请求最前面，变一个字节 prompt 缓存整个
+    //    作废。所有动态内容走 inject_turn_context()。
+    // Stage 5 的 skills / memory 还没接上，先传 nullptr（build_system 会跳过）。
+    return build_system(cfg_, ctx_.skills, ctx_.memory, opts_.system_extra, opts_.identity);
 }
 
 void Agent::inject_turn_context() {
-    todo("Stage 4/6: Agent::inject_turn_context —— 后台通知、todo 变化");
+    const std::string ctx = turn_context(ctx_.background, ctx_.todos);
+    if (ctx.empty()) return;
+
+    // ⚠️ 追加成一条独立的 user 消息，不是塞进已有消息里。
+    //    塞进去会改动已经落盘的历史，而且下一轮 turn_context 变了之后，
+    //    那条消息的字节也跟着变 —— 缓存从那一条起全部作废。
+    //    独立成一条则只有末尾新增，前缀不动。
+    session_.append(Message{Role::User, {TextBlock{reminder(ctx)}}});
 }
 
 std::string Agent::run(std::string_view user_input) {
@@ -48,6 +49,18 @@ std::string Agent::run(std::string_view user_input) {
 
       for (int step = 0; step < max_steps; ++step) {
           if (g_interrupt) { interrupted_ = true; return handle_interrupt({}); }
+
+          // ⚠️ 压缩要在**发请求之前**判断，不能等 API 返回 400 再补救。
+          //    超了才压的话这一轮已经废了，而历史已经落盘。
+          //    compact() 自己负责找安全切分点，找不到就返回 false，不是错误。
+          if (cfg_.compact_at_tokens > 0 &&
+              session_.estimated_tokens() > cfg_.compact_at_tokens) {
+              const int before = session_.estimated_tokens();
+              if (session_.compact(llm_) && on_event_)
+                  on_event_(TextEvent{std::format("[已压缩上下文：约 {} → {} token]\n",
+                                                  before, session_.estimated_tokens())});
+          }
+          inject_turn_context();
 
           LlmRequest req;
           req.system   = &system;

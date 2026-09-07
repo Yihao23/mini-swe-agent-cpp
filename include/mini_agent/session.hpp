@@ -168,6 +168,18 @@ class Session {
 ///       gone for good. Keep the goal, decisions taken, files touched, facts
 ///       verified, work outstanding; drop pleasantries, rejected approaches,
 ///       superseded intermediate state.
-extern const char* kCompactPrompt;   // TODO(Stage 4): 在 session.cpp 里写
+/// @brief The instruction handed to the model when compacting.
+///
+/// @warning It summarises the history that is about to be **deleted**. Whatever
+///          it fails to ask for is gone: a file already edited, an approach
+///          already ruled out. The agent then redoes the work, or walks back
+///          into the dead end — and nothing about that is visible in the code,
+///          only in a long run where it keeps revisiting the same file.
+///
+/// @note Asking for "unresolved problems" and "approaches already ruled out"
+///       is what separates a useful handover from a progress report. A summary
+///       of what was done, with no statement of what is left, leaves the agent
+///       with no next step to take.
+extern const char* kCompactPrompt;
 
 }  // namespace mini

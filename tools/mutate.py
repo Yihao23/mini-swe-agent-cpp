@@ -39,6 +39,34 @@ SUBJ_NEW = '\n'.join([
  '    }',
 ])
 
+S4_SPLIT_OLD = '    const std::size_t split = safe_split(keep_recent);'
+S4_SPLIT_NEW = '    const std::size_t split = messages_.size() > keep_recent ? messages_.size() - keep_recent : 0;'
+S4_RESP_OLD = '    if (!resp) return false;   // ⚠️ 失败就原样返回，绝不能把历史删了再发现总结没拿到'
+S4_RESP_NEW = ('    if (!resp) {\n'
+               '        messages_.erase(messages_.begin(), messages_.begin() + static_cast<long>(split));\n'
+               '        ++compactions_;\n'
+               '        save();\n'
+               '        return false;\n'
+               '    }')
+S4_EMPTY_OLD = '    if (summary.empty()) return false;   // 空纪要比不压缩糟糕得多'
+S4_EMPTY_NEW = '    // MUTANT'
+S4_EST_OLD = '    return static_cast<int>(to_json(messages_).dump().size() / 4);'
+S4_EST_NEW = '    return 0;'
+S4_NOTE_OLD = '    Message note{Role::User,\n                 {TextBlock{"<system-reminder>\\n以下是此前对话的纪要（原文已省略）：\\n\\n" +\n                            summary + "\\n</system-reminder>"}}};\n'
+S4_NOTE_NEW = '    Message note{Role::User, {TextBlock{summary}}};\n'
+S4_WD_OLD = '    push_block(blocks, "Working directory: " + cfg.workdir.string());'
+S4_WD_NEW = '    push_block(blocks, "Working directory: " + cfg.workdir.string() + "\\nNow: " +\n                       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));'
+S4_BREAK_OLD = '    blocks.back().cache_breakpoint = true;'
+S4_BREAK_NEW = '    blocks.front().cache_breakpoint = true;'
+S4_PUSH_OLD = '    if (!text.empty()) out.push_back(SystemBlock{std::move(text), false});'
+S4_PUSH_NEW = '    out.push_back(SystemBlock{std::move(text), false});'
+S4_CUT_OLD = '        if (cut) out += "\\n\\n[... 已截断]";'
+S4_CUT_NEW = '        // MUTANT'
+S4_REMIND_OLD = '    return "<system-reminder>\\n" + std::string(text) + "\\n</system-reminder>";'
+S4_REMIND_NEW = '    return std::string(text);'
+S4_RETURN_OLD = '        return out;\n    }\n    return {};'
+S4_RETURN_NEW = '        acc += out;\n    }\n    return acc;'
+
 # 每项: name, file, edits[(old, new)], binaries, expect[用例名子串], note
 # 可选 known_gap: 已知抓不到，附上为什么。留在清单里是有意的 —— 把没覆盖的地方
 # 记下来，比从清单里删掉假装不存在有用。
@@ -205,6 +233,90 @@ MUTANTS = [
         binaries=["test_search_tools"],
         expect=["glob_sorts_newest_first"],
         note="模型问「有哪些 cpp」时要的几乎总是最近动过的，字母序把 app.cpp 排前面",
+    ),
+    # ── Stage 4：上下文压缩与 prompt 组装 ──────────────────────────────
+    dict(
+        name='compact 用朴素切分而不是 safe_split',
+        file='src/session.cpp',
+        edits=[(S4_SPLIT_OLD, S4_SPLIT_NEW)],
+        binaries=['test_compact'],
+        expect=['compaction_never_orphans_a_tool_pair'],
+        note='切在 tool_result 上 → 它的 tool_use 进了纪要 → 下一轮 400，而历史已落盘，--continue 回来照样 400',
+    ),
+    dict(
+        name='compact 请求失败也照删历史',
+        file='src/session.cpp',
+        edits=[(S4_RESP_OLD, S4_RESP_NEW)],
+        binaries=['test_compact'],
+        expect=['a_failed_request_leaves_the_history_untouched'],
+        note='先删历史再发现总结没拿到 = 不可逆的数据丢失。'
+             '注意变异的形状：单纯删掉那个 return 会解引用出错的 expected（UB），'
+             '空字符串又被下一道 summary.empty() 拦住 —— 那测的不是这条守卫。'
+             '这里直接把「失败时删历史」写出来，才是真正要防的 bug。',
+    ),
+    dict(
+        name='compact 接受空纪要',
+        file='src/session.cpp',
+        edits=[(S4_EMPTY_OLD, S4_EMPTY_NEW)],
+        binaries=['test_compact'],
+        expect=['an_empty_summary_leaves_the_history_untouched'],
+        note='把整段历史换成一句空话',
+    ),
+    dict(
+        name='estimated_tokens 永远返回 0',
+        file='src/session.cpp',
+        edits=[(S4_EST_OLD, S4_EST_NEW)],
+        binaries=['test_compact'],
+        expect=['estimated_tokens_grows_with_the_history'],
+        note='永远不会触发压缩，超 token 直接挂掉',
+    ),
+    dict(
+        name='纪要不带 system-reminder 标记',
+        file='src/session.cpp',
+        edits=[(S4_NOTE_OLD, S4_NOTE_NEW)],
+        binaries=['test_compact'],
+        expect=['the_summary_is_marked_as_a_summary'],
+        note='模型会把机器生成的纪要当成用户的新指令去执行',
+    ),
+    dict(
+        name='system prompt 里混进时间戳',
+        file='src/prompt.cpp',
+        edits=[(S4_WD_OLD, S4_WD_NEW)],
+        binaries=['test_compact'],
+        expect=['system_is_byte_stable_across_calls'],
+        note='缓存逐字节匹配前缀 —— 变一个字节整段对话每轮全价，而功能完全正常',
+    ),
+    dict(
+        name='缓存断点打在第一块而不是最后一块',
+        file='src/prompt.cpp',
+        edits=[(S4_BREAK_OLD, S4_BREAK_NEW)],
+        binaries=['test_compact'],
+        expect=['only_the_last_system_block_carries_the_cache_breakpoint'],
+        note='断点之后的几块每轮全价',
+    ),
+    dict(
+        name='build_system 保留空块',
+        file='src/prompt.cpp',
+        edits=[(S4_PUSH_OLD, S4_PUSH_NEW)],
+        binaries=['test_compact'],
+        expect=['no_empty_system_blocks'],
+        note='空块也是字节，缓存按字节匹配',
+    ),
+    dict(
+        name='project_doc 截断了不说',
+        file='src/prompt.cpp',
+        edits=[(S4_CUT_OLD, S4_CUT_NEW)],
+        binaries=['test_compact'],
+        expect=['project_doc_truncates_instead_of_giving_up'],
+        note='模型以为读全了，照着半份规矩干活',
+    ),
+    dict(
+        name='reminder 不包 system-reminder 标签',
+        file='src/prompt.cpp',
+        edits=[(S4_REMIND_OLD, S4_REMIND_NEW)],
+        binaries=['test_compact'],
+        expect=['reminder_wraps_but_not_when_empty'],
+        note='「后台任务完成了」会被当成用户要求它去处理',
     ),
     dict(
         name="glob 的 **/ 不能匹配零个目录",
@@ -389,7 +501,8 @@ def run_one(m):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("filter", nargs="?", default="", help="只跑名字或文件含此子串的变异")
+    ap.add_argument("filter", nargs="?", default="",
+                    help="只跑 name / file / binaries 里含此子串的变异")
     ap.add_argument("--check", action="store_true", help="只校验锚点，不编译")
     ap.add_argument("--dirty-ok", action="store_true",
                     help="源码有未提交改动时也跑（还原失败就救不回来了）")
@@ -417,11 +530,20 @@ def main():
         print("先修好锚点再跑。")
         return 1
 
-    picked = [m for m in MUTANTS
-              if args.filter in m["name"] or args.filter in m["file"]]
+    # ⚠️ 三个字段都要匹配。只匹配 name 的话，`mutate.py glob` 会静默漏掉
+    #    「遍历不跳过 build/ .git/」（名字里没有 glob），`mutate.py test_compact`
+    #    会一条都匹配不上 —— 而"跑了 0 条"和"全都通过"在输出上很难区分。
+    def matches(m):
+        return (args.filter in m["name"] or args.filter in m["file"]
+                or any(args.filter in b for b in m["binaries"]))
+
+    picked = [m for m in MUTANTS if matches(m)]
     if not picked:
-        print(f"没有匹配 {args.filter!r} 的变异")
+        print(f"没有匹配 {args.filter!r} 的变异。可用的过滤词：")
+        print("  文件: " + ", ".join(sorted({m["file"] for m in MUTANTS})))
+        print("  测试: " + ", ".join(sorted({b for m in MUTANTS for b in m["binaries"]})))
         return 1
+    print(f"选中 {len(picked)}/{len(MUTANTS)} 条变异")
 
     print("先确认基线是绿的 ...", end=" ", flush=True)
     ok, err = build()

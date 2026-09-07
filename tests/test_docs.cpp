@@ -34,6 +34,29 @@ TEST(doc_include_mini_agent_process_hpp_L101) {
     CHECK_MSG(((big.output.size() < 4096)) == (true), "include/mini_agent/process.hpp:111 的示例失效了");
 }
 
+/// From include/mini_agent/prompt.hpp:73
+TEST(doc_include_mini_agent_prompt_hpp_L73) {
+    const Config cfg = doc_config();
+    const auto blocks = build_system(cfg);
+    CHECK_MSG(((blocks.size() > 1)) == (true), "include/mini_agent/prompt.hpp:76 的示例失效了");
+    CHECK_MSG((blocks.back().cache_breakpoint) == (true), "include/mini_agent/prompt.hpp:77 的示例失效了");
+    CHECK_MSG((blocks.front().cache_breakpoint) == (false), "include/mini_agent/prompt.hpp:78 的示例失效了");
+    // 逐字节稳定：同样的输入必须给出同样的字节
+    std::string a; for (const auto& b : build_system(cfg)) a += b.text;
+    std::string b; for (const auto& b2 : build_system(cfg)) b += b2.text;
+    CHECK_MSG(((a == b)) == (true), "include/mini_agent/prompt.hpp:82 的示例失效了");
+    // identity 是覆盖，不是叠加
+    std::string sub; for (const auto& b3 : build_system(cfg, nullptr, nullptr, {}, "我是子 agent")) sub += b3.text;
+    CHECK_MSG(((sub.find("我是子 agent") != std::string::npos)) == (true), "include/mini_agent/prompt.hpp:85 的示例失效了");
+}
+
+/// From include/mini_agent/prompt.hpp:125
+TEST(doc_include_mini_agent_prompt_hpp_L125) {
+    CHECK_MSG(((reminder("后台任务完成").find("<system-reminder>") != std::string::npos)) == (true), "include/mini_agent/prompt.hpp:126 的示例失效了");
+    CHECK_MSG(((reminder("后台任务完成").find("后台任务完成") != std::string::npos)) == (true), "include/mini_agent/prompt.hpp:127 的示例失效了");
+    CHECK_MSG((reminder("").empty()) == (true), "include/mini_agent/prompt.hpp:128 的示例失效了");
+}
+
 /// From include/mini_agent/sandbox.hpp:79
 TEST(doc_include_mini_agent_sandbox_hpp_L79) {
     CHECK_MSG((Rule::parse("Bash")->tool) == ("Bash"), "include/mini_agent/sandbox.hpp:80 的示例失效了");

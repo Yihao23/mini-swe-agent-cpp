@@ -16,6 +16,7 @@
 #include "mini_agent/config.hpp"
 #include "mini_agent/message.hpp"
 #include "mini_agent/parser.hpp"
+#include "mini_agent/prompt.hpp"
 #include "mini_agent/process.hpp"
 #include "mini_agent/sandbox.hpp"
 #include "mini_agent/scheduler.hpp"
