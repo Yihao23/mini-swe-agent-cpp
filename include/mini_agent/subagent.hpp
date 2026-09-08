@@ -18,6 +18,86 @@
 //   2. 收窄的工具集（explorer 只给只读工具 → 天然改不坏东西）
 //   3. 可能更便宜的模型（"读得多、判断少"的活不需要最强模型）
 //
+// ── 派一个子 agent 时，什么换掉、什么共享 ───────────────────────────────────
+//
+//   父 agent 的 ToolContext                   子 agent 的 ToolContext
+//   ──────────────────────                   ────────────────────────
+//     cfg         ─────────共享────────────>   cfg          配置，只读
+//     sandbox     ─────────共享────────────>   sandbox      同一道闸，子 agent
+//                                                            的每次调用照样过
+//     memory      ─────────共享────────────>   memory      ┐ 这些是**资源**，
+//     skills      ─────────共享────────────>   skills      │ 子 agent 该够得着
+//     background  ─────────共享────────────>   background  ┘
+//
+//     session     ───────✂ 换掉 ───────────>   全新的 Session（且不 bind）
+//     registry    ───────✂ 换掉 ───────────>   registry.subset(type->tools)
+//     spawn       ───────✂ 清空 ───────────>   {}          不能再嵌套
+//     todos       ───────✂ 清空 ───────────>   []          计划不继承
+//     depth       ───────  +1  ───────────>   depth + 1
+//
+//   分界线是「资源」和「这一轮的工作区」。session 和 registry 属于后者 ——
+//   共享它们，子 agent 二十轮探索会全部落进父 agent 下一轮要发出去的历史里，
+//   而派它的意义正好是避免这件事。
+//
+// ── 一次调用走完的路 ────────────────────────────────────────────────────────
+//
+//   模型: task(agent_type="explorer", prompt="X 在哪？")
+//        │
+//        ▼
+//   TaskTool::run()  ── ctx.spawn 为空 ──> error（这里已经是子 agent 了）
+//        │ 非空
+//        ▼
+//   ctx.spawn(type, prompt)          ← App 在接线时装的 lambda
+//        │
+//        ▼
+//   spawn_subagent()
+//        │
+//        ├─ find_agent_type(type) ── 找不到 ──> 返回错误 + 列出可用的
+//        ├─ depth + 1 >= kMaxAgentDepth ──> 返回「已达嵌套上限」
+//        │
+//        ├─ registry->subset(type->tools)      收窄
+//        ├─ Session sub_session;               全新，不 bind → 不落盘
+//        ├─ ToolContext sub_ctx = parent_ctx;  复制，再按上表改五处
+//        ├─ AgentOptions{model, max_steps, identity = type->system}
+//        │
+//        ▼
+//   Agent sub(cfg, llm, narrowed, sandbox, sub_session, sub_ctx, {}, opts)
+//        │                        ═══════  ════════════
+//        │                        ⚠️ registry 和 session 是**直接传给 Agent** 的。
+//        │                           sub_ctx 里那两个字段只给**工具**看。
+//        │                           两处都要改对：漏了前者，循环用错工具表；
+//        │                           漏了后者，工具把 read_files 记到父那边去。
+//        │
+//        │  事件不往上传（第七个参数是 {}）—— 父 agent 的终端不该被
+//        │  子 agent 的工具调用刷屏
+//        ▼
+//   sub.run(prompt)   跑到 end_turn 或者用完 max_steps
+//        │
+//        ▼
+//   只有 conclusion 跨回来                    ← 二十轮调查 = 一段文字
+//        │
+//        ▼
+//   ToolResult{content = conclusion}
+//
+// ── 三道防线挡「无限嵌套」──────────────────────────────────────────────────
+//
+//   ① 工具白名单     四种类型的 tools 里都没有 task/task_graph
+//                     → 子 agent 根本拿不到那个工具        ← 当前实际生效的那道
+//   ② sub_ctx.spawn  清空
+//                     → 就算拿到了工具，TaskTool 也会拒绝
+//   ③ depth 检查     depth + 1 >= kMaxAgentDepth 直接返回
+//                     → 就算前两道都破了，也只能再深一层
+//
+//   ⚠️ ① 和 ② 现在互为冗余，所以单行变异测不出 ②（改任何一处，另一处都兜住）。
+//      留着 ② 是因为 ① 是**数据**：哪天有人给 general 加上 task，
+//      白名单那道就没了，而那时 ② 是唯一还站着的。
+//
+// ── 一条这一层保证不了的 ────────────────────────────────────────────────────
+//
+//   任务描述必须**自包含**。子 agent 看不到父的历史，所以 prompt 里得写清
+//   路径、约束、什么算完成。这是隔离的直接代价，代码检查不了 ——
+//   只能在 TaskTool 的 description 里对模型讲清楚。
+//
 #include <string>
 #include <vector>
 

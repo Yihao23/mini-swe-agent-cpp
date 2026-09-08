@@ -27,7 +27,9 @@
 #include "mini_agent/process.hpp"
 #include "mini_agent/sandbox.hpp"
 #include "mini_agent/session.hpp"
+#include "mini_agent/scheduler.hpp"
 #include "mini_agent/skills.hpp"
+#include "mini_agent/subagent.hpp"
 
 
 
@@ -763,6 +765,172 @@ class MemoryTool final : public Tool {
     }
 };
 
+/// @brief Hands one job to a sub-agent and returns only its conclusion.
+///
+/// @note The saving is context, not time. Twenty turns of investigation come
+///       back as one paragraph instead of twenty turns of transcript.
+/// @warning Not read_only: a `coder` sub-agent edits files. The permission
+///          gate applies to the spawn itself; the sub-agent's own calls go
+///          through the same Sandbox again.
+class TaskTool final : public Tool {
+  public:
+    std::string_view name() const override { return "task"; }
+
+    std::string_view description() const override {
+        return "把一件边界清楚的活交给子 agent，只拿回它的结论。"
+               "它有自己的上下文，二十轮调查在你这里只花一段文字。"
+               "适合：要读很多文件才能回答的问题、能独立完成并自验的改动、评审。"
+               "不适合：需要来回商量的、边界不清的 —— 那种自己做。";
+    }
+
+    Json input_schema() const override {
+        Json types = Json::array();
+        for (const auto& t : agent_types()) types.push_back(t.name);
+        return Json{
+            {"type", "object"},
+            {"properties",
+             {{"agent_type", {{"type", "string"}, {"enum", types},
+                              {"description", "哪一种子 agent"}}},
+              {"prompt", {{"type", "string"},
+                          {"description", "任务描述。子 agent 看不到你的上下文，"
+                                          "要自包含：说清目标、边界、什么算完成"}}}}},
+            {"required", Json::array({"agent_type", "prompt"})},
+        };
+    }
+
+    bool read_only() const override { return false; }
+    bool requires_permission() const override { return true; }
+
+    /// 审查对象是子 agent 类型 —— 规则要能写 `deny Task(coder)`。
+    /// 默认实现会取 agent_type（字母序在 prompt 之前），碰巧对，仍然写明。
+    std::string subject(const Json& args) const override {
+        return str_arg(args, "agent_type").value_or(std::string{});
+    }
+
+    ToolResult run(const Json& args, ToolContext& ctx) override {
+        const auto type = str_arg(args, "agent_type");
+        const auto prompt = str_arg(args, "prompt");
+        if (!type || type->empty()) return ToolResult::error("缺少 agent_type 参数");
+        if (!prompt || prompt->empty()) return ToolResult::error("缺少 prompt 参数");
+        // ⚠️ spawn 为空 = 这里已经是子 agent 了。spawn_subagent 会清空它，
+        //    深度检查是第二道保险 —— 两道都留着，因为绕过任何一道的代价
+        //    是无限递归地烧钱。
+        if (!ctx.spawn) return ToolResult::error("当前上下文不允许派子 agent");
+
+        const std::string out = ctx.spawn(*type, *prompt);
+        return ToolResult{.content = out.empty() ? "(子 agent 没有产出结论)" : out,
+                          .metadata = {{"agent_type", *type}}};
+    }
+};
+
+/// @brief Runs a graph of sub-agent jobs with dependencies, several at a time.
+///
+/// @note Runs on Scheduler, which knows nothing about LLMs — which is what
+///       lets its topological ordering, concurrency and cycle detection be
+///       tested in half a second without spending a token.
+class TaskGraphTool final : public Tool {
+  public:
+    std::string_view name() const override { return "task_graph"; }
+
+    std::string_view description() const override {
+        return "一次派一张带依赖的子 agent 任务图：无依赖的并发跑，"
+               "有依赖的等上游完成并拿到上游结论。"
+               "适合能拆成几块、块之间只有少量依赖的大活。"
+               "只有两三个任务、或者依赖是一条链的话，用 task 一个个派更简单。";
+    }
+
+    Json input_schema() const override {
+        return Json{
+            {"type", "object"},
+            {"properties",
+             {{"tasks",
+               {{"type", "array"},
+                {"description", "任务列表"},
+                {"items",
+                 {{"type", "object"},
+                  {"properties",
+                   {{"id", {{"type", "string"}, {"description", "图内唯一"}}},
+                    {"prompt", {{"type", "string"}, {"description", "自包含的任务描述"}}},
+                    {"deps", {{"type", "array"}, {"items", {{"type", "string"}}},
+                              {"description", "必须先完成的任务 id"}}},
+                    {"agent_type", {{"type", "string"}, {"description", "默认 general"}}},
+                    {"priority", {{"type", "integer"}, {"description", "越大越先跑"}}}}},
+                  {"required", Json::array({"id", "prompt"})}}}}}}},
+            {"required", Json::array({"tasks"})},
+        };
+    }
+
+    bool read_only() const override { return false; }
+    bool requires_permission() const override { return true; }
+
+    std::string subject(const Json& args) const override {
+        // 图里可能混着好几种 agent_type，用任务数当审查对象没有意义 ——
+        // 交出工具名，规则只能整个允许或整个拒绝这个工具。
+        (void)args;
+        return "task_graph";
+    }
+
+    ToolResult run(const Json& args, ToolContext& ctx) override {
+        if (!args.is_object() || !args.contains("tasks") || !args["tasks"].is_array())
+            return ToolResult::error("缺少 tasks 参数（必须是数组）");
+        if (!ctx.spawn) return ToolResult::error("当前上下文不允许派子 agent");
+
+        Scheduler sched(ctx.cfg->max_parallel_tools);
+        for (const auto& t : args["tasks"]) {
+            if (!t.is_object()) return ToolResult::error("tasks 里每一项都必须是对象");
+            const auto id = t.value("id", std::string{});
+            const auto prompt = t.value("prompt", std::string{});
+            if (id.empty() || prompt.empty())
+                return ToolResult::error("每个任务都要有非空的 id 和 prompt");
+
+            std::vector<std::string> deps;
+            if (t.contains("deps") && t["deps"].is_array())
+                for (const auto& d : t["deps"])
+                    if (d.is_string()) deps.push_back(d.get<std::string>());
+
+            try {
+                sched.add(id, prompt, std::move(deps), t.value("priority", 0),
+                          t.value("agent_type", std::string{"general"}));
+            } catch (const std::invalid_argument& e) {
+                return ToolResult::error(e.what());   // 重复 id
+            }
+        }
+
+        // ⚠️ 必须先 validate。成环的图 run() 会安安静静地什么都不做就返回 ——
+        //    调用方看到"成功"，而所有任务都停在 pending。错误信息里带着环的
+        //    路径，模型才知道该断哪条边。
+        if (const auto err = sched.validate())
+            return ToolResult::error("任务图有问题: " + *err);
+
+        // ⚠️ runner 在**工作线程**里跑，而 ctx.spawn 会被并发调用。
+        //    这里只捕获 ctx 的 spawn 拷贝，不碰任何共享可变状态。
+        auto spawn = ctx.spawn;
+        sched.run([&spawn](const Task& t, const std::map<std::string, std::string>& upstream) {
+            std::string prompt = t.prompt;
+            if (!upstream.empty()) {
+                prompt += "\n\n上游任务的结论：\n";
+                for (const auto& [id, result] : upstream)
+                    prompt += "\n[" + id + "]\n" + result + "\n";
+            }
+            return spawn(t.agent_type, prompt);
+        });
+
+        std::size_t done = 0, failed = 0, blocked = 0;
+        for (const auto& [_, t] : sched.tasks()) {
+            done += t.status == TaskStatus::Done;
+            failed += t.status == TaskStatus::Failed;
+            blocked += t.status == TaskStatus::Blocked;
+        }
+        return ToolResult{
+            .content = sched.render(),
+            // 有任务失败就是失败，但输出照给 —— 成功的那几个的结论正是
+            // 模型下一步要读的东西。
+            .is_error = failed > 0 || blocked > 0,
+            .metadata = {{"done", done}, {"failed", failed}, {"blocked", blocked}},
+        };
+    }
+};
+
 /// @brief Runs one shell command through run_shell.
 ///
 /// @note Makes no permission decision of its own. By the time run() is called
@@ -854,8 +1022,8 @@ ToolPtr make_bash_tool() { return std::make_shared<BashTool>(); }
 ToolPtr make_todo_tool() { todo("Stage 4: todo —— 覆盖式提交，每轮由 reminder 回灌"); }
 ToolPtr make_skill_tool() { return std::make_shared<SkillTool>(); }
 ToolPtr make_memory_tool() { return std::make_shared<MemoryTool>(); }
-ToolPtr make_task_tool() { todo("Stage 6: task —— 派一个子 agent"); }
-ToolPtr make_task_graph_tool() { todo("Stage 6: task_graph —— 派一张带依赖的图"); }
+ToolPtr make_task_tool() { return std::make_shared<TaskTool>(); }
+ToolPtr make_task_graph_tool() { return std::make_shared<TaskGraphTool>(); }
 ToolPtr make_bash_output_tool() { todo("Stage 6: bash_output"); }
 ToolPtr make_kill_task_tool() { todo("Stage 6: kill_task"); }
 
@@ -872,9 +1040,15 @@ std::vector<ToolPtr> builtin_tools(const Config& cfg) {
     if (cfg.enable_memory) v.push_back(make_memory_tool());
     if (cfg.enable_skills) v.push_back(make_skill_tool());
 
+    if (cfg.enable_subagents) {
+        v.push_back(make_task_tool());
+        v.push_back(make_task_graph_tool());
+    }
+
     // TODO(Stage 4/6): 下面这些工厂现在还是 todo()，一调就抛。开关默认为 true，
     //   所以要等对应 Stage 写完再打开，否则默认配置下 agent 直接起不来。
-    // if (cfg.enable_subagents) v.push_back(make_task_tool());  // Stage 6
+    // v.push_back(make_bash_output_tool());   // Stage 6：BackgroundManager 还没写
+    // v.push_back(make_kill_task_tool());     // 同上
     return v;
 }
 

@@ -58,6 +58,21 @@ ctx.cfg      = &cfg;                         // ⑥ 接线
         ctx.registry = &registry;
         ctx.memory   = memory ? &*memory : nullptr;
         ctx.skills   = skills ? &*skills : nullptr;
+
+        // ⑦ Stage 6：派子 agent 的入口。
+        //
+        // ⚠️ 捕获 this（这里是 Impl*）。Impl 由 App 的 unique_ptr 持有，而 App
+        //    是**不可移动**的（成员互指），所以这个地址在整个 App 生命周期内
+        //    都有效。App 删掉移动构造正是为了这个 —— 可移动的话这就是悬垂捕获，
+        //    而且没有任何东西会说话。
+        //
+        // ⚠️ lambda 里读的是成员 ctx，不是它的拷贝。spawn_subagent 要拿 ctx
+        //    当模板复制一份再收窄，而此刻（接线进行中）ctx.spawn 自己还是空的 ——
+        //    拷贝的话子 agent 拿到的就是那个半成品快照。读成员则永远是最新的。
+        if (cfg.enable_subagents)
+            ctx.spawn = [this](std::string_view type, std::string_view prompt) {
+                return spawn_subagent(cfg, *llm, sandbox, ctx, type, prompt);
+            };
         agent = std::make_unique<Agent>(cfg, *llm, registry, sandbox, session, ctx, on_event);
         
 }

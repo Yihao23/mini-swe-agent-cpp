@@ -117,6 +117,21 @@ T5_DIRS_NEW = '    fs::create_directories(memory_dir());\n    if (!skills_dirs()
 M_RMPATH_OLD = '    const auto item = get(name);\n    if (!item) return false;\n\n    std::error_code ec;\n    const bool gone = fs::remove(item->path, ec);'
 M_RMPATH_NEW = '    std::error_code ec;\n    const bool gone = fs::remove(root_ / (std::string(name) + ".md"), ec);'
 
+G_SESSION_OLD = '    Agent sub(cfg, llm, narrowed, sandbox, sub_session, sub_ctx, {}, std::move(opts));'
+G_SESSION_NEW = '    Agent sub(cfg, llm, narrowed, sandbox, *parent_ctx.session, sub_ctx, {}, std::move(opts));'
+G_REGISTRY_OLD = '    Agent sub(cfg, llm, narrowed, sandbox, sub_session, sub_ctx, {}, std::move(opts));'
+G_REGISTRY_NEW = '    Agent sub(cfg, llm, *parent_ctx.registry, sandbox, sub_session, sub_ctx, {}, std::move(opts));'
+G_SPAWN_OLD = '    sub_ctx.spawn = {};              // 清空 → 子 agent 没有 task 工具可用'
+G_SPAWN_NEW = '    // MUTANT'
+G_DEPTH_OLD = '    if (parent_ctx.depth + 1 >= kMaxAgentDepth)\n        return "已达子 agent 嵌套上限，这一层请自己完成";'
+G_DEPTH_NEW = '    // MUTANT'
+G_IDENT_OLD = '    opts.identity = type->system;'
+G_IDENT_NEW = '    // MUTANT'
+G_VALIDATE_OLD = '        if (const auto err = sched.validate())\n            return ToolResult::error("任务图有问题: " + *err);'
+G_VALIDATE_NEW = '        // MUTANT'
+G_UPSTREAM_OLD = '            if (!upstream.empty()) {\n                prompt += "\\n\\n上游任务的结论：\\n";\n                for (const auto& [id, result] : upstream)\n                    prompt += "\\n[" + id + "]\\n" + result + "\\n";\n            }'
+G_UPSTREAM_NEW = '            (void)upstream;'
+
 # 每项: name, file, edits[(old, new)], binaries, expect[用例名子串], note
 # 可选 known_gap: 已知抓不到，附上为什么。留在清单里是有意的 —— 把没覆盖的地方
 # 记下来，比从清单里删掉假装不存在有用。
@@ -360,6 +375,71 @@ MUTANTS = [
         binaries=['test_memory'],
         expect=['frontmatter_splits_on_the_first_colon_not_the_last'],
         note='值里有冒号时键被切坏',
+    ),
+    # ── Stage 6：子 agent ────────────────────────────────────────────────
+    dict(
+        name='子 agent 用父的 Session 跑循环',
+        file='src/subagent.cpp',
+        edits=[(G_SESSION_OLD, G_SESSION_NEW)],
+        binaries=['test_subagent'],
+        expect=['the_subagents_history_does_not_reach_the_parent'],
+        note='二十轮探索全部落进父 agent 下一轮要发的历史 —— 而那正是派它要避免的事。'
+             '注意挖的是构造函数实参：sub_ctx.session 只影响工具看到的那个，'
+             '循环用的是直接传给 Agent 的那个。删 ctx 字段的话历史照样是隔离的，'
+             '坏掉的是别的东西（工具的 read_files 记到父那边去了）。',
+    ),
+    dict(
+        name='子 agent 用父的完整工具表跑循环',
+        file='src/subagent.cpp',
+        edits=[(G_REGISTRY_OLD, G_REGISTRY_NEW)],
+        binaries=['test_subagent'],
+        expect=['the_subagent_only_gets_its_whitelisted_tools'],
+        note='explorer 拿到 edit，「只读调查」就只剩 prompt 在拦着了',
+    ),
+    dict(
+        name='不清空 sub_ctx.spawn',
+        file='src/subagent.cpp',
+        edits=[(G_SPAWN_OLD, G_SPAWN_NEW)],
+        binaries=['test_subagent'],
+        expect=['the_subagent_cannot_spawn_again'],
+        note='子 agent 还能再派子 agent，每一层的开销乘在上一层上',
+        known_gap='这是第三道保险，而前两道让它现在不可达：四种 agent_type 的工具'
+                  '白名单里都没有 task/task_graph，所以子 agent 根本拿不到那个工具，'
+                  'ctx.spawn 是不是空的没人会去看；深度检查是第二道。'
+                  '留着它是因为白名单是数据、会被改 —— 哪天有人给 general 加上 task，'
+                  '这一行就是唯一还站着的那道。没有单行变异能触发它。',
+    ),
+    dict(
+        name='不检查深度上限',
+        file='src/subagent.cpp',
+        edits=[(G_DEPTH_OLD, G_DEPTH_NEW)],
+        binaries=['test_subagent'],
+        expect=['the_subagent_cannot_spawn_again'],
+        note='第二道保险 —— 两道都要，绕过任何一道的代价是无限递归地烧钱',
+    ),
+    dict(
+        name='子 agent 不覆盖 identity',
+        file='src/subagent.cpp',
+        edits=[(G_IDENT_OLD, G_IDENT_NEW)],
+        binaries=['test_subagent'],
+        expect=['the_subagent_system_prompt_replaces_the_identity'],
+        note='explorer 用着主 agent 的身份段，「不要改文件」那句没了',
+    ),
+    dict(
+        name='task_graph 跳过 validate',
+        file='src/tools/builtin.cpp',
+        edits=[(G_VALIDATE_OLD, G_VALIDATE_NEW)],
+        binaries=['test_subagent'],
+        expect=['a_cyclic_graph_is_refused_before_running'],
+        note='成环时 run() 安安静静什么都不做就返回，调用方看到「成功」而任务全停在 pending',
+    ),
+    dict(
+        name='上游结论不拼进下游 prompt',
+        file='src/tools/builtin.cpp',
+        edits=[(G_UPSTREAM_OLD, G_UPSTREAM_NEW)],
+        binaries=['test_subagent'],
+        expect=['task_graph_runs_the_graph_and_passes_upstream'],
+        note='有依赖却不传结果，这个图就只是个执行顺序，白建了',
     ),
     # ── Stage 5：两个工具与接线 ──────────────────────────────────────────
     dict(

@@ -708,8 +708,10 @@ FakeLlm::FakeLlm(const Config& cfg, std::vector<Turn> script)
 /// llm.complete(req);                    // → turn_c, not turn_b
 /// llm.complete(req);                    // → turn_b
 /// @endcode
-void FakeLlm::push_front(Turn) {
-    todo("Stage 6: FakeLlm::push_front —— 子 agent 测试要往剧本中间插");
+void FakeLlm::push_front(Turn turn) {
+    // 子 agent 的响应要插在父 agent 剧本的**中间**：父 agent 跑到一半发起
+    // spawn，那时父的剧本已经消耗了几条，子 agent 要的是"下一条"。
+    script_.insert(script_.begin(), std::move(turn));
 }
 
 /// @brief Pop the next turn from the script and translate it into an LlmResponse.

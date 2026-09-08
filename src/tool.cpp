@@ -57,8 +57,17 @@ Json ToolRegistry::schemas() const {
     return out;
 }
 
-ToolRegistry ToolRegistry::subset(const std::vector<std::string>&) const {
-    todo("Stage 6: ToolRegistry::subset —— 给子 agent 收窄权限");
+ToolRegistry ToolRegistry::subset(const std::vector<std::string>& names) const {
+    // 共享同一批实例，不拷贝工具 —— 这就是 tools_ 存 shared_ptr 而不是
+    // unique_ptr 的理由。父子两个注册表指向同一个 ReadTool。
+    ToolRegistry out;
+    for (const auto& want : names)
+        for (const auto& t : tools_)
+            if (t->name() == want) { out.tools_.push_back(t); break; }
+    // 认不出的名字直接跳过，不报错：agent_types 里的白名单是硬编码的，
+    // 而工具表随 config 开关变（enable_memory 关了就没有 memory 工具）。
+    // 为此让子 agent 起不来，是拿一个配置问题去换一个功能问题。
+    return out;
 }
 
 std::size_t ToolRegistry::size() const { return tools_.size(); }
