@@ -181,8 +181,16 @@ fs::path Memory::write(std::string_view name, std::string_view description,
 }
 
 bool Memory::remove(std::string_view name) {
+    // ⚠️ 删 get() 会返回的那个文件，不是拼出来的 root_/name.md。
+    //    write() 用 name 当文件名，所以它写的两者一致；但手写的文件可以
+    //    在 frontmatter 里声明一个和文件名不同的 name。按文件名去猜的话，
+    //    get("dup") 找得到、remove("dup") 删不掉 —— 同一个名字两个答案，
+    //    而调用方没有任何办法看出区别。实测过。
+    const auto item = get(name);
+    if (!item) return false;
+
     std::error_code ec;
-    const bool gone = fs::remove(root_ / (std::string(name) + ".md"), ec);
+    const bool gone = fs::remove(item->path, ec);
     if (gone) rebuild_index();
     // 删除和写入一样重要：一条后来发现是错的记忆，不删掉就会一直被召回。
     return gone && !ec;

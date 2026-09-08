@@ -223,6 +223,18 @@ TEST(remove_deletes_and_reindexes) {
     CHECK_MSG(!f.mem.remove("gone"), "删一条不存在的返回 false，不是崩溃");
 }
 
+TEST(remove_deletes_the_file_get_would_return) {
+    Fixture f;
+    // ⚠️ 手写的文件可以声明一个和文件名不同的 name。remove 如果按
+    //    root_/name.md 去猜，get 找得到而 remove 删不掉 —— 同一个名字
+    //    两个方法给出不一致的答案，调用方看不出区别。
+    f.seed("filename-differs", "---\nname: declared-name\ndescription: d\n---\n正文\n");
+
+    CHECK_MSG(f.mem.get("declared-name").has_value(), "按 frontmatter 里的 name 查得到");
+    CHECK_MSG(f.mem.remove("declared-name"), "get 找得到的，remove 就必须删得掉");
+    CHECK(f.mem.items().empty());
+}
+
 // ── 检索 ────────────────────────────────────────────────────────────────────
 TEST(search_weights_the_description_above_the_body) {
     Fixture f;

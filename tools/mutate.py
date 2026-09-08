@@ -114,6 +114,9 @@ T5_NULLMEM_NEW = '        // MUTANT'
 T5_DIRS_OLD = '    if (enable_memory) fs::create_directories(memory_dir());\n    if (enable_skills && !skills_dirs().empty()) fs::create_directories(skills_dirs().front());'
 T5_DIRS_NEW = '    fs::create_directories(memory_dir());\n    if (!skills_dirs().empty()) fs::create_directories(skills_dirs().front());'
 
+M_RMPATH_OLD = '    const auto item = get(name);\n    if (!item) return false;\n\n    std::error_code ec;\n    const bool gone = fs::remove(item->path, ec);'
+M_RMPATH_NEW = '    std::error_code ec;\n    const bool gone = fs::remove(root_ / (std::string(name) + ".md"), ec);'
+
 # 每项: name, file, edits[(old, new)], binaries, expect[用例名子串], note
 # 可选 known_gap: 已知抓不到，附上为什么。留在清单里是有意的 —— 把没覆盖的地方
 # 记下来，比从清单里删掉假装不存在有用。
@@ -282,6 +285,16 @@ MUTANTS = [
         note="模型问「有哪些 cpp」时要的几乎总是最近动过的，字母序把 app.cpp 排前面",
     ),
     # ── Stage 5：长期记忆与 frontmatter ──────────────────────────────────
+    dict(
+        name='remove 按文件名去猜而不是删 get 返回的那条',
+        file='src/memory.cpp',
+        edits=[(M_RMPATH_OLD, M_RMPATH_NEW)],
+        binaries=['test_memory'],
+        expect=['remove_deletes_the_file_get_would_return'],
+        note='手写的文件可以声明一个和文件名不同的 name。按文件名猜的话，'
+             'get 找得到而 remove 删不掉 —— 同一个名字两个方法给出不一致的'
+             '答案，调用方看不出区别。',
+    ),
     dict(
         name='memory 索引不排序',
         file='src/memory.cpp',
