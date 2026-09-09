@@ -232,24 +232,24 @@ TEST(doc_include_mini_agent_sandbox_hpp_L536) {
     CHECK_MSG((sb.check_command("echo a; sudo rm x").action) == (Action::Deny), "include/mini_agent/sandbox.hpp:549 的示例失效了");
 }
 
-/// From include/mini_agent/scheduler.hpp:122
-TEST(doc_include_mini_agent_scheduler_hpp_L122) {
+/// From include/mini_agent/scheduler.hpp:213
+TEST(doc_include_mini_agent_scheduler_hpp_L213) {
     Scheduler ok(2);
     ok.add("a", "先做"); ok.add("b", "再做", {"a"});
-    CHECK_MSG((ok.validate().has_value()) == (false), "include/mini_agent/scheduler.hpp:125 的示例失效了");
+    CHECK_MSG((ok.validate().has_value()) == (false), "include/mini_agent/scheduler.hpp:216 的示例失效了");
     Scheduler cyc(2);
     cyc.add("a", "...", {"b"}); cyc.add("b", "...", {"a"});
-    CHECK_MSG((cyc.validate().has_value()) == (true), "include/mini_agent/scheduler.hpp:129 的示例失效了");
+    CHECK_MSG((cyc.validate().has_value()) == (true), "include/mini_agent/scheduler.hpp:220 的示例失效了");
     // 报错要带上整条路径，否则三十个任务里没法查是哪条边
-    CHECK_MSG(((cyc.validate()->find("a") != std::string::npos)) == (true), "include/mini_agent/scheduler.hpp:131 的示例失效了");
-    CHECK_MSG(((cyc.validate()->find("b") != std::string::npos)) == (true), "include/mini_agent/scheduler.hpp:132 的示例失效了");
+    CHECK_MSG(((cyc.validate()->find("a") != std::string::npos)) == (true), "include/mini_agent/scheduler.hpp:222 的示例失效了");
+    CHECK_MSG(((cyc.validate()->find("b") != std::string::npos)) == (true), "include/mini_agent/scheduler.hpp:223 的示例失效了");
     Scheduler miss(2);
     miss.add("x", "...", {"nope"});
-    CHECK_MSG(((miss.validate()->find("nope") != std::string::npos)) == (true), "include/mini_agent/scheduler.hpp:136 的示例失效了");
+    CHECK_MSG(((miss.validate()->find("nope") != std::string::npos)) == (true), "include/mini_agent/scheduler.hpp:227 的示例失效了");
 }
 
-/// From include/mini_agent/scheduler.hpp:169
-TEST(doc_include_mini_agent_scheduler_hpp_L169) {
+/// From include/mini_agent/scheduler.hpp:260
+TEST(doc_include_mini_agent_scheduler_hpp_L260) {
     Scheduler s(3);
     s.add("a", "analyse perf");
     s.add("b", "analyse security");
@@ -257,11 +257,11 @@ TEST(doc_include_mini_agent_scheduler_hpp_L169) {
     s.run([](const Task& t, const std::map<std::string, std::string>& up) {
         return t.id + ":" + std::to_string(up.size());
     });
-    CHECK_MSG((s.tasks().at("a").status) == (TaskStatus::Done), "include/mini_agent/scheduler.hpp:177 的示例失效了");
-    CHECK_MSG((s.tasks().at("c").status) == (TaskStatus::Done), "include/mini_agent/scheduler.hpp:178 的示例失效了");
+    CHECK_MSG((s.tasks().at("a").status) == (TaskStatus::Done), "include/mini_agent/scheduler.hpp:268 的示例失效了");
+    CHECK_MSG((s.tasks().at("c").status) == (TaskStatus::Done), "include/mini_agent/scheduler.hpp:269 的示例失效了");
     // a 和 b 没有上游，c 拿到两份上游结果
-    CHECK_MSG((s.tasks().at("a").result) == ("a:0"), "include/mini_agent/scheduler.hpp:180 的示例失效了");
-    CHECK_MSG((s.tasks().at("c").result) == ("c:2"), "include/mini_agent/scheduler.hpp:181 的示例失效了");
+    CHECK_MSG((s.tasks().at("a").result) == ("a:0"), "include/mini_agent/scheduler.hpp:271 的示例失效了");
+    CHECK_MSG((s.tasks().at("c").result) == ("c:2"), "include/mini_agent/scheduler.hpp:272 的示例失效了");
     // 上游失败 → 下游标 Blocked，而不是永远 Pending，也不拖垮整张图
     Scheduler f(2);
     f.add("bad", "会抛"); f.add("after", "依赖它", {"bad"});
@@ -269,8 +269,8 @@ TEST(doc_include_mini_agent_scheduler_hpp_L169) {
         if (t.id == "bad") throw std::runtime_error("boom");
         return "ok";
     });
-    CHECK_MSG((f.tasks().at("bad").status) == (TaskStatus::Failed), "include/mini_agent/scheduler.hpp:190 的示例失效了");
-    CHECK_MSG((f.tasks().at("after").status) == (TaskStatus::Blocked), "include/mini_agent/scheduler.hpp:191 的示例失效了");
+    CHECK_MSG((f.tasks().at("bad").status) == (TaskStatus::Failed), "include/mini_agent/scheduler.hpp:281 的示例失效了");
+    CHECK_MSG((f.tasks().at("after").status) == (TaskStatus::Blocked), "include/mini_agent/scheduler.hpp:282 的示例失效了");
 }
 
 /// From include/mini_agent/session.hpp:191
