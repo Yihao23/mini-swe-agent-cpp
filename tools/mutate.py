@@ -132,6 +132,27 @@ G_VALIDATE_NEW = '        // MUTANT'
 G_UPSTREAM_OLD = '            if (!upstream.empty()) {\n                prompt += "\\n\\n上游任务的结论：\\n";\n                for (const auto& [id, result] : upstream)\n                    prompt += "\\n[" + id + "]\\n" + result + "\\n";\n            }'
 G_UPSTREAM_NEW = '            (void)upstream;'
 
+B_CURSOR_OLD = '                t->cursor = t->cursor > drop ? t->cursor - drop : 0;\n'
+B_CURSOR_NEW = ''
+B_ONCE_OLD = '        t.reported = true;'
+B_ONCE_NEW = '        // MUTANT'
+B_ADVANCE_OLD = '    t.cursor = t.buffer.size();'
+B_ADVANCE_NEW = '    // MUTANT'
+B_KILLALL_OLD = '    kill_all();'
+B_KILLALL_NEW = '    // MUTANT'
+B_PGID_OLD = ('    for (const pid_t p : pids) ::kill(-p, SIGTERM);\n'
+              '    if (!pids.empty()) std::this_thread::sleep_for(kGrace);\n'
+              '    for (const pid_t p : pids) ::kill(-p, SIGKILL);   // 已经死了的话是 ESRCH，无所谓')
+B_PGID_NEW = ('    for (const pid_t p : pids) ::kill(p, SIGTERM);\n'
+              '    if (!pids.empty()) std::this_thread::sleep_for(kGrace);\n'
+              '    for (const pid_t p : pids) ::kill(p, SIGKILL);')
+B_KILLPG_OLD = '    ::kill(-it->second.pid, SIGTERM);'
+B_KILLPG_NEW = '    ::kill(it->second.pid, SIGTERM);'
+B_LIMIT_OLD = '        if (running >= kMaxRunning) return {};   // 空 id = 满了，调用方给模型一条说明'
+B_LIMIT_NEW = '        // MUTANT'
+B_REAP_OLD = '            if (t.finished && t.reported) done.push_back(id);'
+B_REAP_NEW = '            if (t.finished) done.push_back(id);'
+
 # 每项: name, file, edits[(old, new)], binaries, expect[用例名子串], note
 # 可选 known_gap: 已知抓不到，附上为什么。留在清单里是有意的 —— 把没覆盖的地方
 # 记下来，比从清单里删掉假装不存在有用。
@@ -139,13 +160,17 @@ MUTANTS = [
     # ── process.cpp —— run_shell 的三个坑 ──────────────────────────────────
     dict(
         name="父进程漏关管道写端",
-        file="src/process.cpp",
-        edits=[("""    //    read() 等不到 EOF，命令早退出了也要卡到超时。
+        # ⚠️ 这段在 Stage 6 里从 process.cpp 抽到了 spawn.hpp/cpp，因为
+        #    run_shell 和 BackgroundManager::start 要共用同一段 fork/pipe。
+        #    --check 当场报了锚点失配 —— 这正是那个检查存在的理由：
+        #    不检查的话，重构之后这条变异会静默地什么都不改，然后报"✓ 抓到了"。
+        file="src/spawn.cpp",
+        edits=[("""    //    read() 等不到 EOF —— 前台命令卡到超时，后台任务永远不算结束。
     ::close(fds[1]);""",
-                """    //    read() 等不到 EOF，命令早退出了也要卡到超时。
+                """    //    read() 等不到 EOF —— 前台命令卡到超时，后台任务永远不算结束。
     // ::close(fds[1]);""")],
-        binaries=["test_process"],
-        expect=["fast_command_returns_immediately"],
+        binaries=["test_process", "test_background"],
+        expect=["fast_command_returns_immediately", "the_destructor_does_not_hang"],
         note="管道永远有一个写者 → 读不到 EOF → 每条命令都卡满超时",
     ),
     dict(
@@ -375,6 +400,73 @@ MUTANTS = [
         binaries=['test_memory'],
         expect=['frontmatter_splits_on_the_first_colon_not_the_last'],
         note='值里有冒号时键被切坏',
+    ),
+    # ── Stage 6：后台任务 ────────────────────────────────────────────────
+    dict(
+        name='截断时不修正 cursor',
+        file='src/background.cpp',
+        edits=[(B_CURSOR_OLD, B_CURSOR_NEW)],
+        binaries=['test_background'],
+        expect=['a_huge_output_does_not_grow_without_bound'],
+        note='cursor 会大于新的 buffer 长度 —— substr 直接抛，或者从错误的位置开始重复/跳过一大段',
+    ),
+    dict(
+        name='通知不置 reported',
+        file='src/background.cpp',
+        edits=[(B_ONCE_OLD, B_ONCE_NEW)],
+        binaries=['test_background'],
+        expect=['a_finished_task_is_reported_exactly_once'],
+        note='模型会以为那条命令跑了两遍，然后据此行动：撤销它，或者再做一遍',
+    ),
+    dict(
+        name='drain 不推进 cursor',
+        file='src/background.cpp',
+        edits=[(B_ADVANCE_OLD, B_ADVANCE_NEW)],
+        binaries=['test_background'],
+        expect=['drain_returns_only_what_is_new'],
+        note='每次全给一遍，一个 dev server 几轮就把上下文撑爆，而新信息只有最后几行',
+    ),
+    dict(
+        name='析构不杀任务',
+        file='src/background.cpp',
+        edits=[(B_KILLALL_OLD, B_KILLALL_NEW)],
+        binaries=['test_background'],
+        expect=['the_destructor_leaves_no_orphans'],
+        note='agent 退出后留下 dev server 占着端口、watcher 占着句柄，而没人知道它们存在',
+    ),
+    dict(
+        name='kill_all 杀 pid 不杀进程组',
+        file='src/background.cpp',
+        edits=[(B_PGID_OLD, B_PGID_NEW)],
+        binaries=['test_background'],
+        expect=['kill_all_kills_the_whole_group'],
+        note='`npm run dev` fork 出的孙子进程活下来，还攥着管道写端。'
+             '⚠️ 必须同时改 SIGTERM 和 SIGKILL 两行 —— 只改一行的话，'
+             '另一行还是 -p，照样把整组杀掉，谁都抓不到。',
+    ),
+    dict(
+        name='kill 杀 pid 不杀进程组',
+        file='src/background.cpp',
+        edits=[(B_KILLPG_OLD, B_KILLPG_NEW)],
+        binaries=['test_background'],
+        expect=['kill_stops_the_whole_process_group'],
+        note='同上',
+    ),
+    dict(
+        name='没有并发任务数上限',
+        file='src/background.cpp',
+        edits=[(B_LIMIT_OLD, B_LIMIT_NEW)],
+        binaries=['test_background'],
+        expect=['there_is_a_cap_on_concurrent_tasks'],
+        note='陷进循环的模型能把线程和进程都开爆，而每一次调用单独看都是合理的',
+    ),
+    dict(
+        name='清理时不管有没有通知过',
+        file='src/background.cpp',
+        edits=[(B_REAP_OLD, B_REAP_NEW)],
+        binaries=['test_background'],
+        expect=['an_unreported_task_is_never_reaped'],
+        note='模型永远不知道那个任务结束了 —— 它还在等一条不会来的消息',
     ),
     # ── Stage 6：子 agent ────────────────────────────────────────────────
     dict(

@@ -6,6 +6,8 @@
 
 #include "mini_agent/process.hpp"
 
+#include "spawn.hpp"
+
 #include <poll.h>
 #include <signal.h>
 #include <sys/wait.h>
@@ -95,52 +97,21 @@ ProcessResult run_shell(const std::string& command, const fs::path& cwd,
         return out;
     };
 
-    int fds[2];
-    if (::pipe(fds) != 0) {
+    // fork / pipe / setpgid / exec 抽在 spawn.hpp 里 —— BackgroundManager 用同一段。
+    // 那三个坑（父进程漏关写端、不 setpgid、fork 后只能调 async-signal-safe）
+    // 在一处解决，两边不会漂移。
+    const SpawnedProcess sp = spawn_process(command, cwd);
+    if (!sp.ok) {
         r.spawn_failed = true;
-        r.output = std::string("pipe() 失败: ") + std::strerror(errno);
+        r.output = sp.error;
         return finish(std::move(r));
     }
-
-    // execl 的参数在 fork 前就取好指针 —— fork 之后不能再碰分配器。
-    const char* const cmd_c = command.c_str();
-    const char* const cwd_c = cwd.c_str();
-
-    const pid_t pid = ::fork();
-    if (pid < 0) {
-        const int e = errno;
-        ::close(fds[0]);
-        ::close(fds[1]);
-        r.spawn_failed = true;
-        r.output = std::string("fork() 失败: ") + std::strerror(e);
-        return finish(std::move(r));
-    }
-
-    if (pid == 0) {
-        // ── 子进程 ───────────────────────────────────────────────────────────
-        // 从这里到 execl 只允许 async-signal-safe 调用：不能 new、不能抛、
-        // 不能碰 iostream。出错一律 _exit()，不是 exit()（那会跑父进程的
-        // atexit 处理器和析构函数）。
-        ::setpgid(0, 0);            // 自成进程组，超时才能杀掉整棵树
-        ::close(fds[0]);            // 读端用不着
-        if (::dup2(fds[1], STDOUT_FILENO) < 0) ::_exit(126);
-        if (::dup2(fds[1], STDERR_FILENO) < 0) ::_exit(126);   // 合并，模型要靠它排错
-        ::close(fds[1]);
-        if (::chdir(cwd_c) != 0) ::_exit(126);
-        ::execl("/bin/sh", "sh", "-c", cmd_c, static_cast<char*>(nullptr));
-        ::_exit(127);               // execl 只有失败才返回；127 = 沿用 shell 的约定
-    }
-
-    // ── 父进程 ───────────────────────────────────────────────────────────────
-    ::setpgid(pid, pid);            // 和子进程里那次比赛，谁先成谁的；输的那个
-                                    // 拿 EACCES/ESRCH，无所谓。两边都做才没有窗口期。
-    // ⚠️ 必须关掉父进程这一侧的写端。留着的话管道永远有一个写者，
-    //    read() 等不到 EOF，命令早退出了也要卡到超时。
-    ::close(fds[1]);
+    const pid_t pid = sp.pid;
+    const int read_fd = sp.read_fd;
 
     const auto deadline = started + timeout;
     bool truncated = false;
-    const bool eof = drain(fds[0], r.output, max_output_bytes, deadline, truncated);
+    const bool eof = drain(read_fd, r.output, max_output_bytes, deadline, truncated);
 
     if (!eof) {
         // 超时。先 SIGTERM 给它机会自己收尾，再 SIGKILL。
@@ -148,12 +119,12 @@ ProcessResult run_shell(const std::string& command, const fs::path& cwd,
         // `sleep 100 &` 起的孙子进程会活下来，还攥着管道写端不放。
         r.timed_out = true;
         ::kill(-pid, SIGTERM);
-        if (!drain(fds[0], r.output, max_output_bytes, Clock::now() + kGrace, truncated)) {
+        if (!drain(read_fd, r.output, max_output_bytes, Clock::now() + kGrace, truncated)) {
             ::kill(-pid, SIGKILL);
-            drain(fds[0], r.output, max_output_bytes, Clock::now() + kReap, truncated);
+            drain(read_fd, r.output, max_output_bytes, Clock::now() + kReap, truncated);
         }
     }
-    ::close(fds[0]);
+    ::close(read_fd);
 
     int status = 0;
     while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {}   // 收尸，别留僵尸
