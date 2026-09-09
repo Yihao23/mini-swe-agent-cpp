@@ -10,6 +10,56 @@
 // 渲染用 std::visit 分派 AgentEvent —— 加一种事件时这里会编译报错，
 // 这正是 variant 相对于"事件基类 + dynamic_cast"的价值。
 //
+// ── 事件到屏幕 ──────────────────────────────────────────────────────────────
+//
+//   Agent ──▶ on_event(AgentEvent)  ──▶ Renderer::operator()
+//                                            │
+//        std::visit 分派五种：                │
+//          TextEvent        文字，可能是一小块（流式）
+//          ThinkingEvent    暗色，可以整个关掉
+//          ToolCallEvent    ⚙ name({args})
+//          ToolResultEvent  ✓ 0.3s   /   ✗ 出错了
+//          StopEvent        end_turn / max_steps / interrupt
+//
+//   ⚠️ Renderer **有状态**，因为流式的文字是一小块一小块来的：
+//
+//        in_text_ = false    ⚙ glob(...) 直接从行首打
+//        in_text_ = true     ⚙ 之前要先换行，否则工具调用会插进半句话中间
+//
+//      这就是它是个类而不是个函数的全部理由。EventSink 按值拿它，
+//      所以那两个 bool 得是可拷贝的普通成员。
+//
+// ── 三个入口 ────────────────────────────────────────────────────────────────
+//
+//   cli_main(argc, argv)
+//        │  手写的参数解析，三十行。C++ 没有 argparse，而这个项目只该有
+//        │  两个依赖 —— 为了解析几个 flag 引第三个不划算
+//        │
+//        ├─ 有任务参数 ──▶ app.agent().run(任务)   跑一次就退出
+//        └─ 没有       ──▶ repl(app)
+//                             │
+//                        ┌────┴─────────────────────────┐
+//                        │  读一行                       │
+//                        │    以 / 开头 ──▶ handle_command() ── true ──> 退出
+//                        │    否则       ──▶ agent.run(line)          │
+//                        └───────────────────────────────────────────┘
+//
+//   handle_command 认这些：
+//     /help /tools /mode /memory /skills /bg /compact /usage /session /clear /quit
+//   认不出的**打出列表**，不是报错 —— 用户打错一个字母，给他看有哪些就够了。
+//
+// ── ask_user：沙箱和终端之间的那根线 ────────────────────────────────────────
+//
+//   Sandbox ──▶ asker_(tool, subject, reason) ──▶ ask_user()
+//                                                    │
+//                                          [y] 允许一次
+//                                          [a] 本会话都允许 → remember_allow()
+//                                          其他 → 拒绝
+//
+//   ⚠️ 除 y / a 之外一律当拒绝。打错一个键往"不"的方向错，代价小得多。
+//   ⚠️ 沙箱**不认识终端** —— 它只拿到一个 AskFn。web 前端会传一个推消息的，
+//      测试传一个立即返回的，CI 里传空的（那时 Ask 落到 Deny）。
+//
 #include <string>
 #include <vector>
 

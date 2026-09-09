@@ -18,6 +18,71 @@
 // 另一个坑：App 里存了大量互指的成员，所以 **App 必须不可拷贝、不可移动**
 // （移动会让 ToolContext 里的指针指向旧对象）。显式 delete 掉。
 //
+// ── 声明顺序（= 构造顺序，析构逆序）─────────────────────────────────────────
+//
+//   记号见 executor.hpp 的图例：──▶ 同步 / ══▶ fork-join / ──▷ 异步
+//
+//     cfg          ─┐  谁都指着它
+//     llm           │
+//     on_event      │
+//     warnings      │
+//     sandbox       │  构造时读 cfg.permission_mode
+//     memory        │  optional —— 关掉就不建，连目录都不建
+//     skills        │
+//     registry      │
+//     session       │
+//     ctx          ─┘  ⚠️ 里面全是指向上面那些的**裸指针**
+//     agent         ←  最后。它依赖全部，也因此最先析构
+//
+//   ⚠️ 顺序错了没有任何诊断。把 agent 挪到 ctx 前面，它拿到的就是一个还没
+//      接好线的 ToolContext —— 编译过、跑起来，然后工具拿到一堆 nullptr。
+//
+// ── 接线：谁指向谁 ──────────────────────────────────────────────────────────
+//
+//                     ┌────────── cfg（唯一一份）──────────┐
+//                     ▼                                    ▼
+//        sandbox ──引用──> cfg        Agent ──引用──> cfg / llm / registry
+//           ▲                                        / sandbox / session / ctx
+//           │                                               │
+//           └───────────── ctx.sandbox ────────────────────┘
+//                         ctx.cfg / ctx.session / ctx.registry
+//                         ctx.memory / ctx.skills     ← 可能是 nullptr
+//                         ctx.spawn                   ← lambda，捕获 this
+//
+//   ctx 里全是**非拥有裸指针**，App 是它们唯一的所有者。这就是那两句 delete
+//   的全部理由：
+//
+//        App(const App&) = delete;   拷贝 → 两份 App 的 ctx 都指向第一份的成员
+//        App(App&&)      = delete;   移动 → 所有指针指向搬空的旧地址
+//
+//   ⚠️ 这两种错误**编译器本来不会说话** —— 写上 delete 就是让它说话。
+//      ctx.spawn 那个 lambda 捕获 this，安全性也全靠这一条。
+//
+// ── 构造做的七件事 ──────────────────────────────────────────────────────────
+//
+//   ① cfg.ensure_dirs()               建目录（看 enable_* 开关）
+//   ② llm 为空 → AnthropicClient       测试传 FakeLlm 进来就跳过
+//   ③ session.bind(sessions_dir())     定落盘位置，此刻还没写文件
+//   ④ memory / skills                  开关打开才建
+//   ⑤ builtin_tools(cfg) → registry    工具表也按开关拼
+//   ⑥ ctx 的十个字段接线
+//   ⑦ ctx.spawn = lambda               Stage 6；捕获 this
+//        ▼
+//   agent = make_unique<Agent>(...)    最后一步，此刻一切就绪
+//
+// ── 为什么用 pimpl ──────────────────────────────────────────────────────────
+//
+//   成员顺序是**语义相关**的，而顺序写在类定义里。摊在头文件里的话，每个
+//   include 它的人都看得见、也都可能"顺手整理一下"—— 而整理的代价是一个
+//   不报错的 bug。关进 .cpp，顺序就只有一个地方能改。
+//
+//   附带好处：头文件不必 include sandbox / session / registry 的定义。
+//
+// ── warnings：非致命问题的出口 ──────────────────────────────────────────────
+//
+//   一条解析不了的权限规则、一个起不来的 MCP server —— 都收进 warnings()，
+//   不抛。为了 config 里的一行写错就不让 agent 启动，代价比收益大得多。
+//
 #include <memory>
 #include <string>
 #include <vector>

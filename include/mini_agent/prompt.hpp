@@ -17,6 +17,60 @@
 // 这也解释了一个你可能见过但没想明白的现象：为什么各种 agent 的"提醒"
 // 总是以 <system-reminder> 出现在用户消息里，而不是写在 system prompt 里。
 //
+// ── 一条线把内容分成两半 ────────────────────────────────────────────────────
+//
+//   请求渲染出来是这个顺序，缓存**逐字节匹配前缀**：
+//
+//     [tools]                      ToolRegistry::schemas()，按名字排序
+//     [system]   ← build_system() 拼的
+//        ├── kIdentity             身份、工作方式（子 agent 的 identity 覆盖它）
+//        ├── kToolGuide            工具怎么用、有哪些坑
+//        ├── Working directory     路径，一个会话里不变
+//        ├── project_doc()         AGENTS.md / CLAUDE.md，改文件才变
+//        ├── skills->index_text()  ┐ 只有名字 + 描述，正文按需 load
+//        ├── memory->index_text()  ┘
+//        └── extra                 子 agent 的补充说明
+//                 ▲
+//                 └── cache_breakpoint = true 打在**最后一块**
+//     ═══════════════════════════════════ 缓存到此为止
+//     [messages]
+//        ...
+//        {user, "<system-reminder>当前 todo: ...</system-reminder>"}  ← turn_context()
+//        {user, "真正的用户输入"}
+//
+//   ⚠️ 分界线的判据只有一个：**这东西每轮都会变吗？**
+//        不变 → system（进缓存，之后每轮省 90%）
+//        会变 → 包成 <system-reminder>，追加成 messages 末尾一条 user 消息
+//
+//   ⚠️ 放错边的代价**不对称**：
+//        动态内容误放 system    → 缓存每轮作废，账单十倍，**功能完全正常**
+//        静态内容误放 reminder  → 只是多花一点点，没别的坏处
+//      所以拿不准的时候往 reminder 放。
+//
+// ── 为什么是 <system-reminder> 而不是直接写 ─────────────────────────────────
+//
+//   模型对这个标签有先验：里面的是**系统附加的上下文**，不是用户的指令。
+//
+//     不包：  "后台任务 bg_1 完成了"
+//             → 读成「用户让我去处理那个任务」
+//     包上：  "<system-reminder>后台任务 bg_1 完成了</system-reminder>"
+//             → 读成「有这么件事，跟我现在做的有关吗？」
+//
+// ── 四个函数各管一段 ────────────────────────────────────────────────────────
+//
+//   build_system(cfg, skills, memory, extra, identity)  ──▶ vector<SystemBlock>
+//        │  ⚠️ 里面**一个会变的东西都不许有**。Agent::run() 在**循环外**
+//        │     调它一次，整个 run 期间不再变
+//        └──▶ project_doc(workdir)    AGENTS.md → CLAUDE.md → .agent.md，
+//                                      第一个找到的赢；太大就截断并说明
+//
+//   turn_context(background, todos)  ──▶ string      每轮开头调
+//        │  后台通知（Stage 6）+ 当前 todo；没内容返回**空串**
+//        └──▶ reminder(text)         包成 <system-reminder>；空进空出
+//
+//   ⚠️ 空返回值是有意义的：调用方只在非空时才 append 一条消息，所以安静的
+//      一轮**一个字节都不加**。返回占位符的话，每轮都往历史里塞一条废消息。
+//
 #include <string>
 #include <vector>
 

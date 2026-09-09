@@ -22,6 +22,74 @@
 //   * 响应匹配：服务端可能穿插发通知（没有 id），必须循环读到 id 对上的那条才返回。
 //     tests/mock_mcp_server.py 会故意在握手中间插一条通知来测你这一点。
 //
+// ── 握手和一次调用 ──────────────────────────────────────────────────────────
+//
+//   记号见 executor.hpp 的图例：──▶ 同步 / ══▶ fork-join / ──▷ 异步
+//
+//   load_mcp_servers(config_path, cwd)
+//        │  读 .mini-agent/mcp.json；文件不存在**不是错误**
+//        │
+//        └─ 对每个 server ──▶ McpClient(name, command, args, cwd)
+//                                  │  fork + 两根管道（stdin / stdout）
+//                                  ▼
+//                             ──▶ initialize()
+//                                  │  发 {"method":"initialize", ...}
+//                                  │  收 capabilities
+//                                  │  ⚠️ **然后必须再发一条**
+//                                  │     notifications/initialized
+//                                  │     不发的话，等它的 server 会一直不答，
+//                                  │     症状是**卡住**而不是报错
+//                                  ▼
+//                             ──▶ list_tools()
+//                                  │  → [{name, description, inputSchema}, ...]
+//                                  ▼
+//                          包一层 Tool，名字加前缀
+//                          mcp__<server>__<tool>
+//        │
+//        ▼
+//   McpLoadResult{ tools, clients, errors }
+//        │        │        │
+//        │        │        └── 起不来的 server 记在这，**不抛**。
+//        │        │            丢掉一个 server 的工具，好过整个 agent 起不来
+//        │        └── ⚠️ 必须留着！工具持有 client 的 shared_ptr，
+//        │            这个 vector 一丢，server 进程就没了，
+//        │            而工具还注册着 —— 下次调用写进一根已关闭的管道
+//        └── 直接 registry.add() 就能用
+//
+//   模型调用一个远程工具：
+//
+//        tool->run(args, ctx) ──▶ client->call_tool(name, args)
+//             │                       │  写一行 JSON-RPC 到 stdin
+//             │                       │  从 stdout 读，直到 id 对上
+//             │                       │  ⚠️ 中间可能夹着**通知**（没有 id 的消息），
+//             │                       │     要跳过它们继续读。不跳的话，
+//             │                       │     一条日志会被当成答案返回给模型
+//             │                       ▼
+//             │                  {content_text, is_error}
+//             ▼
+//        ToolResult
+//
+// ── 名字为什么要加前缀 ──────────────────────────────────────────────────────
+//
+//     filesystem server  提供 read_file
+//     github server      也提供 read_file
+//         → mcp__filesystem__read_file / mcp__github__read_file
+//
+//   两个好处：不撞名；权限规则能精确到某一个 server —— `deny Mcp__github__*`。
+//
+// ── 远程工具的两个标记都取保守值 ────────────────────────────────────────────
+//
+//     read_only()            false   ┐ 第三方 server 干什么我们不知道，
+//     requires_permission()  true    ┘ 安全的假设就是最贵的那个
+//
+//   代价是远程工具永远不并发、永远过闸。相比"它可能在删你的文件"，这不算什么。
+//
+// ── 一条这一层保证不了的 ────────────────────────────────────────────────────
+//
+//   McpLoadResult::clients 得被调用方**存活着**。类型是 shared_ptr 已经在提示
+//   这件事，但没有任何东西能强制 —— 丢掉那个 vector 编译照过，运行到第一次
+//   远程调用才炸，而错误信息说的是管道。
+//
 #include <expected>
 #include <filesystem>
 #include <memory>

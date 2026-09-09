@@ -14,6 +14,69 @@
 //
 // 这是 C++ 里"接口/实现分离"最省事的一种做法，比 pimpl 轻，比暴露类干净。
 //
+// ── 八个工具，三组 ──────────────────────────────────────────────────────────
+//
+//   记号见 executor.hpp 的图例：──▶ 同步 / ══▶ fork-join / ──▷ 异步
+//
+//                          read_only  过闸   subject()      备注
+//   ── 文件 ──────────────────────────────────────────────────────────────
+//     read      看          true      否     path           顺带记 mtime，
+//                                                            edit/write 靠它判「读过没」
+//     write     整个覆盖    false     是     path ⚠️        content < path，
+//                                                            不 override 就交出正文
+//     edit      改一段      false     是     path ⚠️        同上，还多两个 string
+//     glob      按名字找    true      否     搜索起点        不打开文件
+//     grep      按内容找    true      否     搜索起点        跳过二进制和大文件
+//   ── 执行 ──────────────────────────────────────────────────────────────
+//     bash      跑命令      false     是     整条命令行      sandbox 会拆段逐段查
+//   ── 渐进式披露（Stage 5）───────────────────────────────────────────────
+//     skill     加载手册    true      否     skill 名        正文按需取
+//     memory    读写记忆    false     是     记忆名 ⚠️      action < name，
+//                                                            不 override 就交出动作名
+//   ── 子 agent（Stage 6）────────────────────────────────────────────────
+//     task        派一个    false     是     agent_type
+//     task_graph  派一张图  false     是     "task_graph"    内部 ══▶ Scheduler
+//
+//   ⚠️ 标了 ⚠️ 的三个**必须 override subject()**。默认实现取「按 key 字母序的
+//      第一个字符串参数」，而那三个的字母序都排在正确答案前面 —— 沙箱会拿到
+//      要写入的正文 / 动作名去匹配规则，**权限层静默失效，没有任何报错**。
+//      每一个都配了一条测试和一条变异守着。
+//
+// ── 两个布尔标记的分工（最容易搞错的一对，见 tool.hpp）─────────────────────
+//
+//     read_only()            改不改本地文件？  → executor 的并发判据
+//     requires_permission()  要不要问一句？    → sandbox 的免检开关
+//
+//   ⚠️ 免检不等于不受约束：deny 规则对 read/glob/grep/skill 照样生效。
+//      这就是 sandbox.hpp 里 I3 说的事。
+//
+// ── builtin_tools(cfg) 按开关拼表 ───────────────────────────────────────────
+//
+//     总是有            read write edit glob grep bash
+//     enable_memory     + memory
+//     enable_skills     + skill
+//     enable_subagents  + task task_graph
+//
+//   ⚠️ 一个工厂只有在**真的实现了**之后才能进这个列表。剩下的还是 todo()，
+//      一调就抛，而开关默认全是 true —— 提前接上去，默认配置下 agent
+//      直接起不来。有一条测试专门守着这件事。
+//
+// ── 谁调谁 ──────────────────────────────────────────────────────────────────
+//
+//     App 构造 ──▶ builtin_tools(cfg) ──▶ registry.add(...)
+//                        │
+//                        └─ 每个 make_*_tool() 返回 shared_ptr<Tool>
+//                             ↑ 共享所有权：子 agent 的 subset 指向同一批实例
+//
+//     Executor ──▶ tool->run(args, ctx)
+//                        │
+//                        ├─ 文件类 ──▶ ctx.sandbox->resolve_path()
+//                        ├─ bash   ──▶ run_shell()            （process.cpp）
+//                        ├─ skill  ──▶ ctx.skills->get()
+//                        ├─ memory ──▶ ctx.memory->search/get/write/remove
+//                        ├─ task   ──▶ ctx.spawn()            （subagent.cpp）
+//                        └─ task_graph ══▶ Scheduler::run()   （唯一开线程的）
+//
 #include <vector>
 
 #include "mini_agent/tool.hpp"

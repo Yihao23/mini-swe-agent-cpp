@@ -92,27 +92,27 @@ TEST(doc_include_mini_agent_process_hpp_L101) {
     CHECK_MSG(((big.output.size() < 4096)) == (true), "include/mini_agent/process.hpp:111 的示例失效了");
 }
 
-/// From include/mini_agent/prompt.hpp:73
-TEST(doc_include_mini_agent_prompt_hpp_L73) {
+/// From include/mini_agent/prompt.hpp:127
+TEST(doc_include_mini_agent_prompt_hpp_L127) {
     const Config cfg = doc_config();
     const auto blocks = build_system(cfg);
-    CHECK_MSG(((blocks.size() > 1)) == (true), "include/mini_agent/prompt.hpp:76 的示例失效了");
-    CHECK_MSG((blocks.back().cache_breakpoint) == (true), "include/mini_agent/prompt.hpp:77 的示例失效了");
-    CHECK_MSG((blocks.front().cache_breakpoint) == (false), "include/mini_agent/prompt.hpp:78 的示例失效了");
+    CHECK_MSG(((blocks.size() > 1)) == (true), "include/mini_agent/prompt.hpp:130 的示例失效了");
+    CHECK_MSG((blocks.back().cache_breakpoint) == (true), "include/mini_agent/prompt.hpp:131 的示例失效了");
+    CHECK_MSG((blocks.front().cache_breakpoint) == (false), "include/mini_agent/prompt.hpp:132 的示例失效了");
     // 逐字节稳定：同样的输入必须给出同样的字节
     std::string a; for (const auto& b : build_system(cfg)) a += b.text;
     std::string b; for (const auto& b2 : build_system(cfg)) b += b2.text;
-    CHECK_MSG(((a == b)) == (true), "include/mini_agent/prompt.hpp:82 的示例失效了");
+    CHECK_MSG(((a == b)) == (true), "include/mini_agent/prompt.hpp:136 的示例失效了");
     // identity 是覆盖，不是叠加
     std::string sub; for (const auto& b3 : build_system(cfg, nullptr, nullptr, {}, "我是子 agent")) sub += b3.text;
-    CHECK_MSG(((sub.find("我是子 agent") != std::string::npos)) == (true), "include/mini_agent/prompt.hpp:85 的示例失效了");
+    CHECK_MSG(((sub.find("我是子 agent") != std::string::npos)) == (true), "include/mini_agent/prompt.hpp:139 的示例失效了");
 }
 
-/// From include/mini_agent/prompt.hpp:125
-TEST(doc_include_mini_agent_prompt_hpp_L125) {
-    CHECK_MSG(((reminder("后台任务完成").find("<system-reminder>") != std::string::npos)) == (true), "include/mini_agent/prompt.hpp:126 的示例失效了");
-    CHECK_MSG(((reminder("后台任务完成").find("后台任务完成") != std::string::npos)) == (true), "include/mini_agent/prompt.hpp:127 的示例失效了");
-    CHECK_MSG((reminder("").empty()) == (true), "include/mini_agent/prompt.hpp:128 的示例失效了");
+/// From include/mini_agent/prompt.hpp:179
+TEST(doc_include_mini_agent_prompt_hpp_L179) {
+    CHECK_MSG(((reminder("后台任务完成").find("<system-reminder>") != std::string::npos)) == (true), "include/mini_agent/prompt.hpp:180 的示例失效了");
+    CHECK_MSG(((reminder("后台任务完成").find("后台任务完成") != std::string::npos)) == (true), "include/mini_agent/prompt.hpp:181 的示例失效了");
+    CHECK_MSG((reminder("").empty()) == (true), "include/mini_agent/prompt.hpp:182 的示例失效了");
 }
 
 /// From include/mini_agent/sandbox.hpp:210
@@ -356,90 +356,90 @@ TEST(doc_include_mini_agent_tool_hpp_L337) {
     CHECK_MSG((ToolRegistry{}.schemas().is_array()) == (true), "include/mini_agent/tool.hpp:351 的示例失效了");
 }
 
-/// From include/mini_agent/tools/builtin.hpp:52
-TEST(doc_include_mini_agent_tools_builtin_hpp_L52) {
+/// From include/mini_agent/tools/builtin.hpp:115
+TEST(doc_include_mini_agent_tools_builtin_hpp_L115) {
     DocTools t;
     const auto write = make_write_tool();
     // ⚠️ subject() 交给沙箱的必须是 path。默认实现按 key 字母序取第一个字符串，
     //    content < path —— 那样沙箱审查的就是要写入的正文，规则永远命不中。
-    CHECK_MSG((write->subject(Json{{"content","x = 1"},{"path","src/a.py"}})) == ("src/a.py"), "include/mini_agent/tools/builtin.hpp:58 的示例失效了");
+    CHECK_MSG((write->subject(Json{{"content","x = 1"},{"path","src/a.py"}})) == ("src/a.py"), "include/mini_agent/tools/builtin.hpp:121 的示例失效了");
     // 新建：不需要先 read，父目录自动建
-    CHECK_MSG((t.run(write, Json{{"path","src/a.py"},{"content","x = 1\n"}}).is_error) == (false), "include/mini_agent/tools/builtin.hpp:61 的示例失效了");
-    CHECK_MSG((t.slurp("src/a.py")) == ("x = 1\n"), "include/mini_agent/tools/builtin.hpp:62 的示例失效了");
+    CHECK_MSG((t.run(write, Json{{"path","src/a.py"},{"content","x = 1\n"}}).is_error) == (false), "include/mini_agent/tools/builtin.hpp:124 的示例失效了");
+    CHECK_MSG((t.slurp("src/a.py")) == ("x = 1\n"), "include/mini_agent/tools/builtin.hpp:125 的示例失效了");
     // 已存在但没读过：拒绝，文件原封不动
     t.seed("old.py", "重要代码\n");
-    CHECK_MSG((t.run(write, Json{{"path","old.py"},{"content","没了"}}).is_error) == (true), "include/mini_agent/tools/builtin.hpp:66 的示例失效了");
-    CHECK_MSG((t.slurp("old.py")) == ("重要代码\n"), "include/mini_agent/tools/builtin.hpp:67 的示例失效了");
+    CHECK_MSG((t.run(write, Json{{"path","old.py"},{"content","没了"}}).is_error) == (true), "include/mini_agent/tools/builtin.hpp:129 的示例失效了");
+    CHECK_MSG((t.slurp("old.py")) == ("重要代码\n"), "include/mini_agent/tools/builtin.hpp:130 的示例失效了");
     // 读过之后就放行
     t.run(make_read_tool(), Json{{"path","old.py"}});
-    CHECK_MSG((t.run(write, Json{{"path","old.py"},{"content","新的\n"}}).is_error) == (false), "include/mini_agent/tools/builtin.hpp:71 的示例失效了");
-    CHECK_MSG((t.slurp("old.py")) == ("新的\n"), "include/mini_agent/tools/builtin.hpp:72 的示例失效了");
+    CHECK_MSG((t.run(write, Json{{"path","old.py"},{"content","新的\n"}}).is_error) == (false), "include/mini_agent/tools/builtin.hpp:134 的示例失效了");
+    CHECK_MSG((t.slurp("old.py")) == ("新的\n"), "include/mini_agent/tools/builtin.hpp:135 的示例失效了");
 }
 
-/// From include/mini_agent/tools/builtin.hpp:91
-TEST(doc_include_mini_agent_tools_builtin_hpp_L91) {
+/// From include/mini_agent/tools/builtin.hpp:154
+TEST(doc_include_mini_agent_tools_builtin_hpp_L154) {
     DocTools t;
     const auto write = make_write_tool();
     const auto edit  = make_edit_tool();
     t.run(write, Json{{"path","a.py"},{"content","x = 1\ny = 2\nz = 2\n"}});
     // 改一行用 edit，不必把整个文件重发一遍
-    CHECK_MSG((t.run(edit, Json{{"path","a.py"},{"old_string","x = 1"},{"new_string","x = 9"}}).is_error) == (false), "include/mini_agent/tools/builtin.hpp:98 的示例失效了");
-    CHECK_MSG((t.slurp("a.py")) == ("x = 9\ny = 2\nz = 2\n"), "include/mini_agent/tools/builtin.hpp:99 的示例失效了");
+    CHECK_MSG((t.run(edit, Json{{"path","a.py"},{"old_string","x = 1"},{"new_string","x = 9"}}).is_error) == (false), "include/mini_agent/tools/builtin.hpp:161 的示例失效了");
+    CHECK_MSG((t.slurp("a.py")) == ("x = 9\ny = 2\nz = 2\n"), "include/mini_agent/tools/builtin.hpp:162 的示例失效了");
     // old_string 出现两次（"= 2" 在 y 和 z 两行里）→ 拒绝，不猜是哪一个
-    CHECK_MSG((t.run(edit, Json{{"path","a.py"},{"old_string","= 2"},{"new_string","= 8"}}).is_error) == (true), "include/mini_agent/tools/builtin.hpp:102 的示例失效了");
-    CHECK_MSG((t.slurp("a.py")) == ("x = 9\ny = 2\nz = 2\n"), "include/mini_agent/tools/builtin.hpp:103 的示例失效了");
+    CHECK_MSG((t.run(edit, Json{{"path","a.py"},{"old_string","= 2"},{"new_string","= 8"}}).is_error) == (true), "include/mini_agent/tools/builtin.hpp:165 的示例失效了");
+    CHECK_MSG((t.slurp("a.py")) == ("x = 9\ny = 2\nz = 2\n"), "include/mini_agent/tools/builtin.hpp:166 的示例失效了");
     // 没读过的文件不能改
     t.seed("other.py", "q = 1\n");
-    CHECK_MSG((t.run(edit, Json{{"path","other.py"},{"old_string","q = 1"},{"new_string","q = 2"}}).is_error) == (true), "include/mini_agent/tools/builtin.hpp:107 的示例失效了");
+    CHECK_MSG((t.run(edit, Json{{"path","other.py"},{"old_string","q = 1"},{"new_string","q = 2"}}).is_error) == (true), "include/mini_agent/tools/builtin.hpp:170 的示例失效了");
 }
 
-/// From include/mini_agent/tools/builtin.hpp:127
-TEST(doc_include_mini_agent_tools_builtin_hpp_L127) {
+/// From include/mini_agent/tools/builtin.hpp:190
+TEST(doc_include_mini_agent_tools_builtin_hpp_L190) {
     DocTools t;
     const auto glob = make_glob_tool();
     t.seed("src/a.cpp", "x\n");
     t.seed("build/gen.cpp", "x\n");
     const auto found = t.run(glob, Json{{"pattern","*.cpp"}}).content;
-    CHECK_MSG(((found.find("src/a.cpp") != std::string::npos)) == (true), "include/mini_agent/tools/builtin.hpp:133 的示例失效了");
-    CHECK_MSG(((found.find("build/") != std::string::npos)) == (false), "include/mini_agent/tools/builtin.hpp:134 的示例失效了");
+    CHECK_MSG(((found.find("src/a.cpp") != std::string::npos)) == (true), "include/mini_agent/tools/builtin.hpp:196 的示例失效了");
+    CHECK_MSG(((found.find("build/") != std::string::npos)) == (false), "include/mini_agent/tools/builtin.hpp:197 的示例失效了");
     // 审查对象是搜索起点，不是模式 —— 规则约束的是「能看哪个目录」
-    CHECK_MSG((glob->subject(Json{{"pattern","*.cpp"},{"path","src"}})) == ("src"), "include/mini_agent/tools/builtin.hpp:136 的示例失效了");
+    CHECK_MSG((glob->subject(Json{{"pattern","*.cpp"},{"path","src"}})) == ("src"), "include/mini_agent/tools/builtin.hpp:199 的示例失效了");
 }
 
-/// From include/mini_agent/tools/builtin.hpp:161
-TEST(doc_include_mini_agent_tools_builtin_hpp_L161) {
+/// From include/mini_agent/tools/builtin.hpp:224
+TEST(doc_include_mini_agent_tools_builtin_hpp_L224) {
     DocTools t;
     const auto grep = make_grep_tool();
     t.seed("a.py", "import os\nx = compute()\n");
     t.seed("blob.o", std::string("compute\0\0garbage", 15));
     const auto hits = t.run(grep, Json{{"pattern","compute"}});
-    CHECK_MSG(((hits.content.find("a.py:2:") != std::string::npos)) == (true), "include/mini_agent/tools/builtin.hpp:167 的示例失效了");
-    CHECK_MSG(((hits.content.find("blob.o") != std::string::npos)) == (false), "include/mini_agent/tools/builtin.hpp:168 的示例失效了");
-    CHECK_MSG((hits.metadata.at("matches")) == (1), "include/mini_agent/tools/builtin.hpp:169 的示例失效了");
+    CHECK_MSG(((hits.content.find("a.py:2:") != std::string::npos)) == (true), "include/mini_agent/tools/builtin.hpp:230 的示例失效了");
+    CHECK_MSG(((hits.content.find("blob.o") != std::string::npos)) == (false), "include/mini_agent/tools/builtin.hpp:231 的示例失效了");
+    CHECK_MSG((hits.metadata.at("matches")) == (1), "include/mini_agent/tools/builtin.hpp:232 的示例失效了");
     // 坏正则给一句能改的话，不抛
-    CHECK_MSG((t.run(grep, Json{{"pattern","[unclosed"}}).is_error) == (true), "include/mini_agent/tools/builtin.hpp:171 的示例失效了");
+    CHECK_MSG((t.run(grep, Json{{"pattern","[unclosed"}}).is_error) == (true), "include/mini_agent/tools/builtin.hpp:234 的示例失效了");
 }
 
-/// From include/mini_agent/tools/builtin.hpp:240
-TEST(doc_include_mini_agent_tools_builtin_hpp_L240) {
+/// From include/mini_agent/tools/builtin.hpp:303
+TEST(doc_include_mini_agent_tools_builtin_hpp_L303) {
     DocTools t;
     Memory mem(t.cfg.memory_dir());
     t.ctx.memory = &mem;
     const auto memory = make_memory_tool();
     // ⚠️ 审查对象是被操作的那条记忆，不是 action。字母序 action < name，
     //    默认实现会把 "write" 交给沙箱去匹配规则。
-    CHECK_MSG((memory->subject(Json{{"action","write"},{"name","user-prefs"}})) == ("user-prefs"), "include/mini_agent/tools/builtin.hpp:248 的示例失效了");
+    CHECK_MSG((memory->subject(Json{{"action","write"},{"name","user-prefs"}})) == ("user-prefs"), "include/mini_agent/tools/builtin.hpp:311 的示例失效了");
     const Json write_args{{"action","write"},{"name","style"},
                           {"description","提交信息的格式要求"},
                           {"body","Conventional Commits"},{"type","feedback"}};
-    CHECK_MSG((t.run(memory, write_args).is_error) == (false), "include/mini_agent/tools/builtin.hpp:253 的示例失效了");
+    CHECK_MSG((t.run(memory, write_args).is_error) == (false), "include/mini_agent/tools/builtin.hpp:316 的示例失效了");
     const auto loaded = t.run(memory, Json{{"action","load"},{"name","style"}});
-    CHECK_MSG(((loaded.content.find("Conventional Commits") != std::string::npos)) == (true), "include/mini_agent/tools/builtin.hpp:255 的示例失效了");
+    CHECK_MSG(((loaded.content.find("Conventional Commits") != std::string::npos)) == (true), "include/mini_agent/tools/builtin.hpp:318 的示例失效了");
     // description 是必填的
-    CHECK_MSG((t.run(memory, Json{{"action","write"},{"name","x"},{"body","b"}}).is_error) == (true), "include/mini_agent/tools/builtin.hpp:258 的示例失效了");
+    CHECK_MSG((t.run(memory, Json{{"action","write"},{"name","x"},{"body","b"}}).is_error) == (true), "include/mini_agent/tools/builtin.hpp:321 的示例失效了");
     // 未知 action 的报错要点出可用的那几个，而不是抱怨缺 name
     const auto bad = t.run(memory, Json{{"action","frobnicate"}});
-    CHECK_MSG(((bad.content.find("search") != std::string::npos)) == (true), "include/mini_agent/tools/builtin.hpp:261 的示例失效了");
+    CHECK_MSG(((bad.content.find("search") != std::string::npos)) == (true), "include/mini_agent/tools/builtin.hpp:324 的示例失效了");
 }
 
 int main() { return mt::run_all(); }
