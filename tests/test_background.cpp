@@ -333,7 +333,11 @@ TEST(old_finished_tasks_are_reaped) {
 TEST(an_unreported_task_is_never_reaped) {
     BackgroundManager bg;
     const auto wd = workdir();
-    const auto first = bg.start("echo important", wd, "还没通知过");
+    // ⚠️ 断言拿的是 **label**，不是 id。id 是 "bg_1"，而它是 "bg_10".."bg_19"
+    //    的前缀 —— 拿 id 当针的话，bg_1 被清掉了 render_list() 里照样匹配得上，
+    //    正确实现和坏实现给出同一个答案。变异测试抓到过这一版。
+    const std::string kNeedle = "还没通知过";
+    const auto first = bg.start("echo important", wd, kNeedle);
     CHECK(wait_until([&] { return has(bg.render_list(), "已结束"); }));
 
     // 故意不调 notifications()，然后塞满。逐个等它结束 —— 不等的话
@@ -345,7 +349,7 @@ TEST(an_unreported_task_is_never_reaped) {
     }
     // ⚠️ 没通知过就清掉的话，模型永远不知道那个任务结束了 ——
     //    它还在等一条不会来的消息。
-    CHECK_MSG(has(bg.render_list(), first), "没通知过的任务不能被清掉");
+    CHECK_MSG(has(bg.render_list(), kNeedle), "没通知过的任务不能被清掉");
 }
 
 // ── 并发 ────────────────────────────────────────────────────────────────────

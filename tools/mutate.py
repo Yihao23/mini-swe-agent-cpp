@@ -847,20 +847,23 @@ MUTANTS = [
     dict(
         name="kill_task 的 subject 用默认实现",
         file="src/tools/builtin.cpp",
-        edits=[('    /// 审查对象是任务 id —— 只有一个字符串参数，默认实现也对，仍然写明。\n    std::string subject(const Json& args) const override {\n        return str_arg(args, "task_id").value_or(std::string{});\n    }\n\n    ToolResult run', '    ToolResult run')],
+        edits=[('        return str_arg(args, "task_id").value_or(std::string{});', '        return {};')],
         binaries=["test_bg_tools"],
         expect=["kill_task_is_reviewed_by_task_id"],
-        note="今天默认实现碰巧也返回 task_id；哪天多一个字符串参数，"
-             "沙箱规则就会静默匹配到错的东西",
+        note="空串在沙箱里是「没有对象」，deny kill_task(bg_1) 匹配不到任何东西。"
+             "⚠️ 不能变异成「删掉 override」—— kill_task 只有一个字符串参数，"
+             "默认实现碰巧返回同一个东西，那样的变异是个 no-op",
     ),
     dict(
         name="turn_context 拿了通知却不用",
         file="src/prompt.cpp",
-        edits=[('out += "后台任务状态变化：\\n";', 'out += "";')],
+        edits=[('        const auto news = background->notifications();\n        if (!news.empty()) {\n            out += "后台任务状态变化：\\n";\n            for (const auto& n : news) out += "  " + n + "\\n";\n            out += "\\n";\n        }',
+                '        const auto news = background->notifications();\n        (void)news;')],
         binaries=["test_bg_tools"],
         expect=["a_finished_task_is_injected_into_the_next_turn_exactly_once"],
-        note="notifications() 是有副作用的读 —— 结果丢掉，"
-             "那条消息就永远不会再来，模型在等一个不存在的信号",
+        note="notifications() 是有副作用的读 —— 结果丢掉，那条消息就永远不会再来，"
+             "模型在等一个不存在的信号。⚠️ 必须整块挖掉：只删表头的话，"
+             "id 是下面那个 for 逐条打印的，测试照样能看到",
     ),
 ]
 
