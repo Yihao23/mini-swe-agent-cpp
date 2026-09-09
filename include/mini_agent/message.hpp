@@ -15,6 +15,53 @@
 //
 // 这条判据在整个项目里反复出现：封闭用 variant，开放用虚函数。
 //
+// ── 数据长什么样，怎么进出 ──────────────────────────────────────────────────
+//
+//                        Message
+//                      ┌──────────────────────────────┐
+//                      │ role     User | Assistant     │
+//                      │ content  vector<ContentBlock> │  一轮可以有好几块
+//                      └───────────┬──────────────────┘
+//                                  │  ContentBlock 是五选一（variant）
+//         ┌────────────┬───────────┼─────────────┬──────────────────┐
+//         ▼            ▼           ▼             ▼                  ▼
+//     TextBlock   ThinkingBlock  Redacted    ToolUseBlock     ToolResultBlock
+//       text       thinking      Thinking      id   ⚠️          tool_use_id ⚠️
+//                  signature ⚠️    data        name             content
+//                                              input            is_error
+//
+//   ⚠️ 三个「必须原样带回」的字段：
+//        signature      API 下一轮会校验，改了就报「签名无效」
+//        data           读不懂，但少了它签名链就断
+//        id/tool_use_id 配不上的话下一轮请求直接 400
+//
+//   谁发出去的（role）不完全等于谁说的：
+//        User      = 一切**喂给**模型的，包括工具结果
+//        Assistant = 模型产出的
+//   所以「这是真的用户输入还是工具结果」要用 has_tool_result() 判断 ——
+//   Session::safe_split() 找压缩切分点靠的就是它。
+//
+//   两个方向的转换：
+//
+//        Message ──── to_json() ────> {"role":..., "content":[...]}  发出去
+//                <── message_from_json() ──                          读回来
+//
+//   ⚠️ 两个不对称的地方，都在 to_json 里：
+//        is_error 只在为 true 时才序列化（省字节，也是 API 的约定）
+//        未知 type 在读回来时**整块丢弃**，不是伪造一个空 TextBlock ——
+//          API 会加新块类型，猜一个结构等于往历史里塞模型没说过的话
+//
+// ── 两个不变量 ──────────────────────────────────────────────────────────────
+//
+//   ┌── I1  to_json / message_from_json 往返之后内容不变 ────────────────┐
+//   │ 违反 → --continue 读回来的历史和写出去的不是同一个，而且看不出来。  │
+//   │ 例外是上面说的"未知 type 丢弃"，那是有意的。                        │
+//   └────────────────────────────────────────────────────────────────────┘
+//   ┌── I2  ContentBlock 的每个 alternative 都有对应的 type 字符串 ──────┐
+//   │ 维护者：to_json 里那个 overloaded 的 visit —— 加一种块时它编译报错，│
+//   │        这正是选 variant 而不是虚函数的理由。                       │
+//   └────────────────────────────────────────────────────────────────────┘
+//
 #include <optional>
 #include <string>
 #include <variant>

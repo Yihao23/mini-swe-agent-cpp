@@ -8,6 +8,55 @@
 //
 // 字段已经列好（这是"结构"），load() 的实现是你的活。
 //
+// ── 优先级链：后来的盖住先前的 ──────────────────────────────────────────────
+//
+//   Config{}                      默认值（就写在字段的初始化器里）
+//        │
+//   ──▶ .mini-agent/config.json   项目配置。解析失败**跳过**，不是致命错 ——
+//        │                        一行写错不该让 agent 起不来
+//   ──▶ 环境变量                   ANTHROPIC_MODEL / MINI_AGENT_MODE / ...
+//        │
+//   ──▶ 命令行                     cli.cpp 在 load_config() 返回之后覆盖
+//        │
+//        ▼
+//   normalize()                   ⚠️ 必须调，而且 load_config 里调了**两次**
+//        │                           （文件之后一次、环境变量之后一次）
+//        ▼
+//   一份可用的 Config
+//
+//   ⚠️ C++ 没有 __post_init__。normalize() 干两件事：把 workdir 变成
+//      weakly_canonical 的绝对路径、给空的 state_dir 填默认值。
+//      漏调的话 workdir 里还留着 `..`，而沙箱的越界检查是拿它当基准的 ——
+//      整个路径边界就建在一个没规范化的前缀上。它是幂等的，多调无害。
+//
+// ── 谁读它，读哪几个 ────────────────────────────────────────────────────────
+//
+//   AnthropicClient   model / max_tokens / effort / thinking / stream
+//   Agent             max_steps / compact_at_tokens / stream
+//   Sandbox           permission_mode（只在构造时拷一份）/ allow_rules / deny_rules
+//                     workdir ← resolve_path 的基准，见 sandbox.hpp 的 I5
+//   Executor          max_output_chars / max_parallel_tools
+//   BashTool          tool_timeout_sec / workdir
+//   App               enable_* 四个开关 / ensure_dirs()
+//
+//   ⚠️ 全都拿 `const Config&`，指向 App 那一份。所以 App 不可移动 ——
+//      移动了这些引用全成悬垂的，而没有任何东西会说话。
+//
+//   ⚠️ Sandbox 构造时把 permission_mode **拷**进自己的 mode_，不是每次读 cfg_。
+//      因为 /mode 命令要能改它，而 cfg 是 const 的。
+//
+// ── 派生路径 ────────────────────────────────────────────────────────────────
+//
+//   workdir/                      模型能碰的一切都在这里面
+//     └── .mini-agent/            = state_dir（normalize 填的默认值）
+//           ├── sessions/         会话历史，一个 .json
+//           ├── memory/           一条记忆一个 .md          （enable_memory）
+//           ├── skills/           一个 skill 一个文件夹      （enable_skills）
+//           └── mcp.json          外部 server 列表          （enable_mcp）
+//
+//   ⚠️ ensure_dirs() 看开关：关掉的功能不建目录。在别人的工作区里留一个
+//      永远空着的 .mini-agent/memory 是种噪音 —— 用户会以为它有用。
+//
 #include <filesystem>
 #include <optional>
 #include <string>

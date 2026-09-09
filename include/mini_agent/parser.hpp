@@ -9,6 +9,54 @@
 // 事件也是**封闭集合**，所以又是 variant（见 message.hpp 的判据）。
 // UI 层用 std::visit 分派，加一种事件时所有 visitor 都会编译报错 —— 这正是你要的。
 //
+// ── 一次响应，一趟遍历，四个产物 ────────────────────────────────────────────
+//
+//   LlmResponse.content = [TextBlock, ThinkingBlock, ToolUseBlock, ...]
+//        │
+//        │   parse()   —— 遍历一次，四样同时产出
+//        ▼
+//   ┌─────────────────────────────────────────────────────────────────────┐
+//   │  text        所有 TextBlock 拼起来        → 给屏幕                   │
+//   │  thinking    所有 ThinkingBlock 拼起来    → 给屏幕（可关）           │
+//   │  tool_calls  vector<ToolCallEvent>        → 给 Executor             │
+//   │  message     ⚠️ **原样**的那些块           → 给 Session               │
+//   └─────────────────────────────────────────────────────────────────────┘
+//
+//   ⚠️ message 是搬运不是重建。签名藏在 ThinkingBlock 里，从拼好的 text
+//      重新造一个 Message 会把它丢掉 —— 下一轮请求报「签名无效」，
+//      而报错说的和真正的原因（解析时丢了字段）差着十万八千里。
+//
+//   ⚠️ ToolCallEvent 和 ToolUseBlock 长得几乎一样，是**故意**分开的：
+//      ToolUseBlock 是 wire format，住在 message.hpp（最底层）；
+//      ToolCallEvent 是内部事件，永远不序列化。合成一个的话，
+//      message.hpp 就要依赖它上面的 parser.hpp。
+//
+// ── 回程：一批工具结果打成一条消息 ──────────────────────────────────────────
+//
+//   Executor 跑完 → vector<ToolResultEvent>
+//        │
+//        │   tool_result_message()
+//        ▼
+//   **一条** Message{User, [ToolResultBlock, ToolResultBlock, ...]}
+//        │
+//        ⚠️ 拆成多条会教会模型别再并行调工具 —— 它从历史里学到"一次只该调一个"。
+//           没有任何东西会报错，只是以后每轮都慢。
+//        ⚠️ 每个 tool_use 都要有配对的结果。少一个，下一轮请求 400。
+//        ⚠️ 空输出要换成占位符，否则模型分不清「跑了但没输出」和「没跑」。
+//
+// ── 事件流：谁在听 ──────────────────────────────────────────────────────────
+//
+//   AgentEvent = variant<TextEvent, ThinkingEvent, ToolCallEvent,
+//                        ToolResultEvent, StopEvent>
+//        │
+//        └── EventSink（std::function，**可以为空**）
+//                 │
+//                 ├─ Renderer   终端渲染，有状态（记着是不是正在流式输出中间）
+//                 └─ 子 agent   传 {} —— 父的终端不该被它的工具调用刷屏
+//
+//   ⚠️ 每个调用点都要 `if (on_event_)`。空的 std::function 调用会抛
+//      bad_function_call，而"没人在听"是常态，不是错误。
+//
 #include <functional>
 #include <string>
 #include <variant>

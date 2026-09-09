@@ -16,6 +16,68 @@
 // ToolContext 则相反：里面全是**非拥有裸指针**。它是一个"借来的引用包"，
 // 生命周期由 App 保证（所有被指向的对象都活得比一次 agent run 长）。
 //
+// ── 一个工具在系统里的两个身份 ──────────────────────────────────────────────
+//
+//   给模型看的（每轮都发，进缓存前缀）        给 executor 用的（本地）
+//   ──────────────────────────────           ────────────────────────
+//     name()          叫什么                   read_only()           能不能并发
+//     description()   什么时候用它              requires_permission() 要不要过闸
+//     input_schema()  参数长什么样              subject(args)         审查哪个字符串
+//                                              run(args, ctx)        真干活
+//        │
+//        └── schema() 把前三个打成 {name, description, input_schema}
+//                     ToolRegistry::schemas() 收齐、**按名字排序**、进请求
+//
+// ── 两个布尔标记不是一回事（最容易搞错的地方）──────────────────────────────
+//
+//                        read_only()          requires_permission()
+//   问的是               改不改本地文件？       要不要问一句？
+//   谁在看               executor（并发判据）   sandbox（免检开关）
+//   ──────────────────────────────────────────────────────────────────
+//   read                 true                 false
+//   glob / grep          true                 false
+//   write / edit         false                true
+//   bash                 false                true
+//   一个抓 URL 的工具     true                 true    ← 不改本地文件，但出网要过闸
+//
+//   ⚠️ 免检（requires_permission=false）的语义是「不需要**询问**」，
+//      不是「不受任何约束」—— deny 规则对它照样生效，见 sandbox.hpp 的 I3。
+//
+// ── 一次调用怎么流过这里 ────────────────────────────────────────────────────
+//
+//   模型: {"name":"write", "input":{"path":"a.py","content":"x = 1"}}
+//        │
+//        ──▶ registry.get("write")  ── nullptr ──> error + 列出可用工具名
+//        │
+//        ──▶ tool->subject(args)  ──> "a.py"
+//        │      ⚠️ 这里给错了，下面整层权限都在审查错误的东西。
+//        │         默认实现取「按 key 字母序的第一个字符串」，而 content < path ——
+//        │         write 不 override 的话交出去的是**要写入的正文**。
+//        │         规则 Write(src/**) 永远命不中，静默失效。
+//        │
+//        ──▶ sandbox.authorize(*tool, args)  ── Deny ──> error（带 reason）
+//        │
+//        ──▶ tool->run(args, ctx)
+//        │      args 是模型给的，**要自己验类型** —— schema 是提示不是保证
+//        │      ctx 里全是**非拥有裸指针**，谁都不负责生命周期
+//        ▼
+//   ToolResult{content, is_error, metadata}
+//        │        ↑ 失败是**值**不是异常：一次读不到文件不该终结整个 run
+//        │        ↑ metadata 只给 UI，永远不进 API
+//        ▼
+//   truncate_output → tool_result 块 → 下一轮请求
+//
+// ── 谁拥有什么 ──────────────────────────────────────────────────────────────
+//
+//   ToolRegistry ── shared_ptr<Tool> ──> 工具实例 <── shared_ptr ── 子 agent 的 subset
+//                                          ↑
+//                            真正的共享所有权，这就是不用 unique_ptr 的理由
+//
+//   ToolContext ── 裸指针 ──> cfg / sandbox / session / memory / ...
+//                    ↑ 一个「借来的引用包」，生命周期由 App 保证
+//                      Stage 5/6 的字段在没实现时是 nullptr，
+//                      所以它们是指针不是引用 —— 类型在表达「可能不存在」
+//
 #include <functional>
 #include <memory>
 #include <string>

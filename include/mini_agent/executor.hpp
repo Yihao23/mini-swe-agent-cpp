@@ -17,6 +17,72 @@
 //
 #include <vector>
 
+// ── 一批工具调用怎么跑完 ────────────────────────────────────────────────────
+//
+//   调用性质的记号（整个项目通用，沿用 UML 时序图）：
+//
+//                        调用方等吗   内部开线程   出错时错误在哪
+//     ──▶  同步            等          不开        当场返回
+//     ══▶  fork-join       **等**      开          在工作线程里发生，
+//                                                  得攒成值带回主线程
+//     ──▷  异步            不等        —          调用方早走了，只能记下来
+//                                                  等它回来问
+//
+//     ⚠️ fork-join 对调用方来说**和同步一样是阻塞的** —— 它把活分给几条线程
+//        同时做，然后等全部汇合才返回。没有 future、没有回调。单独一个记号
+//        是因为它内部有并发，而并发决定了错误怎么传、要不要加锁：
+//          ──▶  没有并发，不用锁
+//          ══▶  Scheduler 的做法是**根本不共享**：工作线程只跑 runner 返回
+//               一个 string，tasks_ 全在主线程上改 —— 所以那个类里一把锁都没有
+//          ──▷  必须加锁：读线程在往 buffer 写，主线程在 drain 它
+//
+//     实线 + **实心**箭头 = 同步、**空心**箭头 = 异步，是 UML 的约定。
+//     双线那个是自定义的 —— UML 活动图用一条粗横杠表示 fork/join，那个记号
+//     在纵向流程图里好用，横向的调用链里会打断阅读。
+//     虚线留给 UML 的原意「返回」，所以这里不拿它表示异步。这些图也从不画
+//     返回箭头 —— 返回值一律写成下一行的 ▼ 加一段文字。
+//
+//   Agent::run()
+//        │
+//        ──▶ run_batch(calls)          ⚠️ 现在是**串行**的，见文末
+//              │
+//              └─ 对每个 call ──▶ run_one(call)
+//                                   │
+//                                   ├─ registry.get(name) ── 没有 ──> error 结果
+//                                   │                                 + 列出可用工具名
+//                                   ├──▶ sandbox.authorize(tool, args)
+//                                   │       Deny ──> error 结果（带 reason）
+//                                   ├──▶ tool->run(args, ctx)
+//                                   │       try / catch(std::exception&) / catch(...)
+//                                   ├─ truncate_output(结果, max_output_chars)
+//                                   └─ 记耗时、发 ToolResultEvent
+//              │
+//              ▼
+//        vector<ToolResultEvent>       ⚠️ 顺序必须和入参一致
+//              │
+//        ──▶ tool_result_message(...)  打成**一条** user Message
+//
+// ── 为什么 run_one 永不抛 ───────────────────────────────────────────────────
+//
+//   工具不存在、参数类型不对、沙箱拒绝、工具自己抛异常 —— 四种都变成一条
+//   is_error 的结果交回去。抛出来的话，一次坏调用会终结整个 run，
+//   而模型永远不知道为什么。
+//
+//   两个 catch 都要：catch(std::exception&) 能拿到 what()；catch(...) 挡住
+//   别的类型的 throw，不让它掀掉进程。
+//
+// ── 并发：写着的和做着的不一样 ──────────────────────────────────────────────
+//
+//   ⚠️ 现在 run_batch 是**串行**的：`for (c : calls) out.push_back(run_one(c));`
+//
+//   打算做成：全部工具都 read_only() 才并发（fork-join，`══▶`），
+//   否则串行。判据是全或无 —— 一个写工具就把整批降级，因为两个工具
+//   在同一棵树上竞争不是模型能推理的东西。
+//
+//   模型经常一轮要三四个 read/grep，串行意味着三四倍的墙上时间。
+//   做的时候要点：std::async 必须显式写 std::launch::async（默认策略允许
+//   deferred，那是假并发），而且结果顺序要和入参一致。
+//
 #include "mini_agent/parser.hpp"
 #include "mini_agent/tool.hpp"
 
@@ -65,10 +131,12 @@ class Executor {
     ///          tool_use_id, but a reordered batch makes the transcript
     ///          unreadable for anyone debugging it.
     ///
-    /// @note Concurrency is all-or-nothing: the batch runs in parallel only
-    ///       when **every** tool in it is read_only(). One writer means the
-    ///       whole batch is serialised, because two tools racing on the same
-    ///       tree is not something the model can reason about.
+    /// @warning ⚠️ Currently serial. The intended rule is all-or-nothing —
+    ///          parallel only when **every** tool is read_only(), since one
+    ///          writer means two tools could race on the same tree, which is
+    ///          not something the model can reason about — but that is not
+    ///          implemented yet. A turn asking for three greps takes three
+    ///          times as long as it needs to.
     std::vector<ToolResultEvent> run_batch(const std::vector<ToolCallEvent>& calls);
 
   private:

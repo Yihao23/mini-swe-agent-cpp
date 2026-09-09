@@ -8,62 +8,62 @@
 
 using namespace mini;
 
-/// From include/mini_agent/message.hpp:96
-TEST(doc_include_mini_agent_message_hpp_L96) {
+/// From include/mini_agent/message.hpp:143
+TEST(doc_include_mini_agent_message_hpp_L143) {
     const Message m{Role::Assistant, {TextBlock{"Let me look"},
                     ToolUseBlock{"toolu_1", "read", Json{{"path","a.py"}}}}};
     const Json j = to_json(m);
-    CHECK_MSG((j.at("role")) == ("assistant"), "include/mini_agent/message.hpp:100 的示例失效了");
-    CHECK_MSG((j.at("content").size()) == (2u), "include/mini_agent/message.hpp:101 的示例失效了");
-    CHECK_MSG((j.at("content").at(0).at("type")) == ("text"), "include/mini_agent/message.hpp:102 的示例失效了");
-    CHECK_MSG((j.at("content").at(1).at("type")) == ("tool_use"), "include/mini_agent/message.hpp:103 的示例失效了");
+    CHECK_MSG((j.at("role")) == ("assistant"), "include/mini_agent/message.hpp:147 的示例失效了");
+    CHECK_MSG((j.at("content").size()) == (2u), "include/mini_agent/message.hpp:148 的示例失效了");
+    CHECK_MSG((j.at("content").at(0).at("type")) == ("text"), "include/mini_agent/message.hpp:149 的示例失效了");
+    CHECK_MSG((j.at("content").at(1).at("type")) == ("tool_use"), "include/mini_agent/message.hpp:150 的示例失效了");
     // round-trip：解回来必须一模一样
-    CHECK_MSG((message_from_json(j).content.size()) == (2u), "include/mini_agent/message.hpp:105 的示例失效了");
-    CHECK_MSG((message_from_json(j).role) == (Role::Assistant), "include/mini_agent/message.hpp:106 的示例失效了");
-    CHECK_MSG((to_json(message_from_json(j)).dump()) == (j.dump()), "include/mini_agent/message.hpp:107 的示例失效了");
+    CHECK_MSG((message_from_json(j).content.size()) == (2u), "include/mini_agent/message.hpp:152 的示例失效了");
+    CHECK_MSG((message_from_json(j).role) == (Role::Assistant), "include/mini_agent/message.hpp:153 的示例失效了");
+    CHECK_MSG((to_json(message_from_json(j)).dump()) == (j.dump()), "include/mini_agent/message.hpp:154 的示例失效了");
 }
 
-/// From include/mini_agent/message.hpp:119
-TEST(doc_include_mini_agent_message_hpp_L119) {
-    CHECK_MSG((to_json(ContentBlock{TextBlock{"hi"}})) == (Json({{"type","text"},{"text","hi"}})), "include/mini_agent/message.hpp:120 的示例失效了");
-    CHECK_MSG((to_json(ContentBlock{ToolUseBlock{"t1","read",Json{{"p",1}}}}).at("type")) == ("tool_use"), "include/mini_agent/message.hpp:121 的示例失效了");
-    CHECK_MSG((to_json(ContentBlock{ToolUseBlock{"t1","read",Json{{"p",1}}}}).at("id")) == ("t1"), "include/mini_agent/message.hpp:122 的示例失效了");
+/// From include/mini_agent/message.hpp:166
+TEST(doc_include_mini_agent_message_hpp_L166) {
+    CHECK_MSG((to_json(ContentBlock{TextBlock{"hi"}})) == (Json({{"type","text"},{"text","hi"}})), "include/mini_agent/message.hpp:167 的示例失效了");
+    CHECK_MSG((to_json(ContentBlock{ToolUseBlock{"t1","read",Json{{"p",1}}}}).at("type")) == ("tool_use"), "include/mini_agent/message.hpp:168 的示例失效了");
+    CHECK_MSG((to_json(ContentBlock{ToolUseBlock{"t1","read",Json{{"p",1}}}}).at("id")) == ("t1"), "include/mini_agent/message.hpp:169 的示例失效了");
     // is_error 只在为真时序列化
-    CHECK_MSG((to_json(ContentBlock{ToolResultBlock{"t1","ok",false}}).contains("is_error")) == (false), "include/mini_agent/message.hpp:124 的示例失效了");
-    CHECK_MSG((to_json(ContentBlock{ToolResultBlock{"t1","bad",true}}).at("is_error")) == (true), "include/mini_agent/message.hpp:125 的示例失效了");
+    CHECK_MSG((to_json(ContentBlock{ToolResultBlock{"t1","ok",false}}).contains("is_error")) == (false), "include/mini_agent/message.hpp:171 的示例失效了");
+    CHECK_MSG((to_json(ContentBlock{ToolResultBlock{"t1","bad",true}}).at("is_error")) == (true), "include/mini_agent/message.hpp:172 的示例失效了");
 }
 
-/// From include/mini_agent/parser.hpp:86
-TEST(doc_include_mini_agent_parser_hpp_L86) {
+/// From include/mini_agent/parser.hpp:134
+TEST(doc_include_mini_agent_parser_hpp_L134) {
     LlmResponse r;
     r.content = {TextBlock{"Let me look"},
                  ToolUseBlock{"toolu_1", "read", {{"path", "a.py"}}}};
     r.stop_reason = "tool_use";
     const ParsedResponse p = parse(r);
-    CHECK_MSG((p.text) == ("Let me look"), "include/mini_agent/parser.hpp:92 的示例失效了");
-    CHECK_MSG((p.tool_calls.size()) == (1u), "include/mini_agent/parser.hpp:93 的示例失效了");
-    CHECK_MSG((p.tool_calls.at(0).name) == ("read"), "include/mini_agent/parser.hpp:94 的示例失效了");
-    CHECK_MSG((p.tool_calls.at(0).input.at("path")) == ("a.py"), "include/mini_agent/parser.hpp:95 的示例失效了");
-    CHECK_MSG((p.wants_tools()) == (true), "include/mini_agent/parser.hpp:96 的示例失效了");
+    CHECK_MSG((p.text) == ("Let me look"), "include/mini_agent/parser.hpp:140 的示例失效了");
+    CHECK_MSG((p.tool_calls.size()) == (1u), "include/mini_agent/parser.hpp:141 的示例失效了");
+    CHECK_MSG((p.tool_calls.at(0).name) == ("read"), "include/mini_agent/parser.hpp:142 的示例失效了");
+    CHECK_MSG((p.tool_calls.at(0).input.at("path")) == ("a.py"), "include/mini_agent/parser.hpp:143 的示例失效了");
+    CHECK_MSG((p.wants_tools()) == (true), "include/mini_agent/parser.hpp:144 的示例失效了");
     // ⚠️ message 要原样保留两个块，不是从 text 重建 —— 思考签名藏在里面
-    CHECK_MSG((p.message.content.size()) == (2u), "include/mini_agent/parser.hpp:98 的示例失效了");
-    CHECK_MSG((p.message.role) == (Role::Assistant), "include/mini_agent/parser.hpp:99 的示例失效了");
+    CHECK_MSG((p.message.content.size()) == (2u), "include/mini_agent/parser.hpp:146 的示例失效了");
+    CHECK_MSG((p.message.role) == (Role::Assistant), "include/mini_agent/parser.hpp:147 的示例失效了");
 }
 
-/// From include/mini_agent/parser.hpp:153
-TEST(doc_include_mini_agent_parser_hpp_L153) {
+/// From include/mini_agent/parser.hpp:201
+TEST(doc_include_mini_agent_parser_hpp_L201) {
     const Message m = tool_result_message({
         {.id = "toolu_1", .name = "read",  .output = "x = 1"},
         {.id = "toolu_2", .name = "write", .output = ""},
         {.id = "toolu_3", .name = "bash",  .output = "boom", .is_error = true}});
-    CHECK_MSG((m.role) == (Role::User), "include/mini_agent/parser.hpp:158 的示例失效了");
-    CHECK_MSG((m.content.size()) == (3u), "include/mini_agent/parser.hpp:159 的示例失效了");
-    CHECK_MSG((std::get<ToolResultBlock>(m.content.at(0)).tool_use_id) == ("toolu_1"), "include/mini_agent/parser.hpp:160 的示例失效了");
-    CHECK_MSG((std::get<ToolResultBlock>(m.content.at(0)).content) == ("x = 1"), "include/mini_agent/parser.hpp:161 的示例失效了");
-    CHECK_MSG((std::get<ToolResultBlock>(m.content.at(0)).is_error) == (false), "include/mini_agent/parser.hpp:162 的示例失效了");
+    CHECK_MSG((m.role) == (Role::User), "include/mini_agent/parser.hpp:206 的示例失效了");
+    CHECK_MSG((m.content.size()) == (3u), "include/mini_agent/parser.hpp:207 的示例失效了");
+    CHECK_MSG((std::get<ToolResultBlock>(m.content.at(0)).tool_use_id) == ("toolu_1"), "include/mini_agent/parser.hpp:208 的示例失效了");
+    CHECK_MSG((std::get<ToolResultBlock>(m.content.at(0)).content) == ("x = 1"), "include/mini_agent/parser.hpp:209 的示例失效了");
+    CHECK_MSG((std::get<ToolResultBlock>(m.content.at(0)).is_error) == (false), "include/mini_agent/parser.hpp:210 的示例失效了");
     // 空输出要有占位符，否则模型分不清「跑了但没输出」和「什么都没发生」
-    CHECK_MSG(((std::get<ToolResultBlock>(m.content.at(1)).content.empty())) == (false), "include/mini_agent/parser.hpp:164 的示例失效了");
-    CHECK_MSG((std::get<ToolResultBlock>(m.content.at(2)).is_error) == (true), "include/mini_agent/parser.hpp:165 的示例失效了");
+    CHECK_MSG(((std::get<ToolResultBlock>(m.content.at(1)).content.empty())) == (false), "include/mini_agent/parser.hpp:212 的示例失效了");
+    CHECK_MSG((std::get<ToolResultBlock>(m.content.at(2)).is_error) == (true), "include/mini_agent/parser.hpp:213 的示例失效了");
 }
 
 /// From include/mini_agent/process.hpp:88
@@ -273,8 +273,8 @@ TEST(doc_include_mini_agent_scheduler_hpp_L169) {
     CHECK_MSG((f.tasks().at("after").status) == (TaskStatus::Blocked), "include/mini_agent/scheduler.hpp:191 的示例失效了");
 }
 
-/// From include/mini_agent/session.hpp:110
-TEST(doc_include_mini_agent_session_hpp_L110) {
+/// From include/mini_agent/session.hpp:191
+TEST(doc_include_mini_agent_session_hpp_L191) {
     // 0 user "task1"      ← 安全，但落在 keep_recent 窗口里
     // 1 assistant tool_use
     // 2 user tool_result  ← 不安全：切在这里会让 1 的 tool_use 变成孤儿
@@ -290,70 +290,70 @@ TEST(doc_include_mini_agent_session_hpp_L110) {
         Message{Role::User, {TextBlock{"task2"}}},
         Message{Role::Assistant, {TextBlock{"working"}}}};
     // 从下标 3 往前扫，只找到落在窗口内的 0 → 返回 0，这次不压
-    CHECK_MSG((s.safe_split(3)) == (0u), "include/mini_agent/session.hpp:126 的示例失效了");
+    CHECK_MSG((s.safe_split(3)) == (0u), "include/mini_agent/session.hpp:207 的示例失效了");
     // 窗口收窄到 1，下标 4 就在窗口外了，切在那条真正的用户输入上
-    CHECK_MSG((s.safe_split(1)) == (4u), "include/mini_agent/session.hpp:128 的示例失效了");
+    CHECK_MSG((s.safe_split(1)) == (4u), "include/mini_agent/session.hpp:209 的示例失效了");
     // ⚠️ 永远不会返回 2 —— 那是 tool_result，切在那里下一轮请求必然 400
-    CHECK_MSG(((s.safe_split(2) != 2u)) == (true), "include/mini_agent/session.hpp:130 的示例失效了");
-    CHECK_MSG(((s.safe_split(4) != 2u)) == (true), "include/mini_agent/session.hpp:131 的示例失效了");
+    CHECK_MSG(((s.safe_split(2) != 2u)) == (true), "include/mini_agent/session.hpp:211 的示例失效了");
+    CHECK_MSG(((s.safe_split(4) != 2u)) == (true), "include/mini_agent/session.hpp:212 的示例失效了");
 }
 
-/// From include/mini_agent/tool.hpp:59
-TEST(doc_include_mini_agent_tool_hpp_L59) {
-    CHECK_MSG((ToolResult::error("file not found").is_error) == (true), "include/mini_agent/tool.hpp:60 的示例失效了");
-    CHECK_MSG((ToolResult::error("file not found").content) == ("file not found"), "include/mini_agent/tool.hpp:61 的示例失效了");
-    CHECK_MSG((ToolResult::error("x").metadata.is_object()) == (true), "include/mini_agent/tool.hpp:62 的示例失效了");
-    CHECK_MSG((ToolResult{.content = "ok"}.is_error) == (false), "include/mini_agent/tool.hpp:63 的示例失效了");
+/// From include/mini_agent/tool.hpp:121
+TEST(doc_include_mini_agent_tool_hpp_L121) {
+    CHECK_MSG((ToolResult::error("file not found").is_error) == (true), "include/mini_agent/tool.hpp:122 的示例失效了");
+    CHECK_MSG((ToolResult::error("file not found").content) == ("file not found"), "include/mini_agent/tool.hpp:123 的示例失效了");
+    CHECK_MSG((ToolResult::error("x").metadata.is_object()) == (true), "include/mini_agent/tool.hpp:124 的示例失效了");
+    CHECK_MSG((ToolResult{.content = "ok"}.is_error) == (false), "include/mini_agent/tool.hpp:125 的示例失效了");
 }
 
-/// From include/mini_agent/tool.hpp:170
-TEST(doc_include_mini_agent_tool_hpp_L170) {
+/// From include/mini_agent/tool.hpp:232
+TEST(doc_include_mini_agent_tool_hpp_L232) {
     const DocTool t;
-    CHECK_MSG((t.subject(Json{{"path","a.py"}})) == ("a.py"), "include/mini_agent/tool.hpp:172 的示例失效了");
-    CHECK_MSG((t.subject(Json{{"limit",100},{"path","a.py"}})) == ("a.py"), "include/mini_agent/tool.hpp:173 的示例失效了");
-    CHECK_MSG((t.subject(Json{{"content","x = 1"},{"path","a.py"}})) == ("x = 1"), "include/mini_agent/tool.hpp:174 的示例失效了");
-    CHECK_MSG((t.subject(Json::array())) == (""), "include/mini_agent/tool.hpp:175 的示例失效了");
-    CHECK_MSG((t.subject(Json::object())) == (""), "include/mini_agent/tool.hpp:176 的示例失效了");
-    CHECK_MSG((t.subject(Json())) == (""), "include/mini_agent/tool.hpp:177 的示例失效了");
+    CHECK_MSG((t.subject(Json{{"path","a.py"}})) == ("a.py"), "include/mini_agent/tool.hpp:234 的示例失效了");
+    CHECK_MSG((t.subject(Json{{"limit",100},{"path","a.py"}})) == ("a.py"), "include/mini_agent/tool.hpp:235 的示例失效了");
+    CHECK_MSG((t.subject(Json{{"content","x = 1"},{"path","a.py"}})) == ("x = 1"), "include/mini_agent/tool.hpp:236 的示例失效了");
+    CHECK_MSG((t.subject(Json::array())) == (""), "include/mini_agent/tool.hpp:237 的示例失效了");
+    CHECK_MSG((t.subject(Json::object())) == (""), "include/mini_agent/tool.hpp:238 的示例失效了");
+    CHECK_MSG((t.subject(Json())) == (""), "include/mini_agent/tool.hpp:239 的示例失效了");
 }
 
-/// From include/mini_agent/tool.hpp:202
-TEST(doc_include_mini_agent_tool_hpp_L202) {
+/// From include/mini_agent/tool.hpp:264
+TEST(doc_include_mini_agent_tool_hpp_L264) {
     const DocTool t{"read"};
     const Json s = t.schema();
-    CHECK_MSG((s.at("name")) == ("read"), "include/mini_agent/tool.hpp:205 的示例失效了");
-    CHECK_MSG((s.contains("description")) == (true), "include/mini_agent/tool.hpp:206 的示例失效了");
-    CHECK_MSG((s.contains("input_schema")) == (true), "include/mini_agent/tool.hpp:207 的示例失效了");
+    CHECK_MSG((s.at("name")) == ("read"), "include/mini_agent/tool.hpp:267 的示例失效了");
+    CHECK_MSG((s.contains("description")) == (true), "include/mini_agent/tool.hpp:268 的示例失效了");
+    CHECK_MSG((s.contains("input_schema")) == (true), "include/mini_agent/tool.hpp:269 的示例失效了");
     // 三个键，一个不多 —— 多余的字段 API 会拒绝
-    CHECK_MSG((s.size()) == (3u), "include/mini_agent/tool.hpp:209 的示例失效了");
+    CHECK_MSG((s.size()) == (3u), "include/mini_agent/tool.hpp:271 的示例失效了");
 }
 
-/// From include/mini_agent/tool.hpp:238
-TEST(doc_include_mini_agent_tool_hpp_L238) {
+/// From include/mini_agent/tool.hpp:300
+TEST(doc_include_mini_agent_tool_hpp_L300) {
     ToolRegistry r;
     r.add(std::make_shared<DocTool>("read"));
-    CHECK_MSG(((r.get("read") != nullptr)) == (true), "include/mini_agent/tool.hpp:241 的示例失效了");
-    CHECK_MSG(((r.get("nope") == nullptr)) == (true), "include/mini_agent/tool.hpp:242 的示例失效了");
-    CHECK_MSG(((r.get("") == nullptr)) == (true), "include/mini_agent/tool.hpp:243 的示例失效了");
-    CHECK_MSG((r.size()) == (1u), "include/mini_agent/tool.hpp:244 的示例失效了");
+    CHECK_MSG(((r.get("read") != nullptr)) == (true), "include/mini_agent/tool.hpp:303 的示例失效了");
+    CHECK_MSG(((r.get("nope") == nullptr)) == (true), "include/mini_agent/tool.hpp:304 的示例失效了");
+    CHECK_MSG(((r.get("") == nullptr)) == (true), "include/mini_agent/tool.hpp:305 的示例失效了");
+    CHECK_MSG((r.size()) == (1u), "include/mini_agent/tool.hpp:306 的示例失效了");
 }
 
-/// From include/mini_agent/tool.hpp:275
-TEST(doc_include_mini_agent_tool_hpp_L275) {
+/// From include/mini_agent/tool.hpp:337
+TEST(doc_include_mini_agent_tool_hpp_L337) {
     ToolRegistry r;
     r.add(std::make_shared<DocTool>("write"));
     r.add(std::make_shared<DocTool>("read"));
     r.add(std::make_shared<DocTool>("bash"));
     const Json s = r.schemas();
-    CHECK_MSG((s.is_array()) == (true), "include/mini_agent/tool.hpp:281 的示例失效了");
-    CHECK_MSG((s.size()) == (3u), "include/mini_agent/tool.hpp:282 的示例失效了");
-    CHECK_MSG((s.at(0).value("name", std::string{})) == ("bash"), "include/mini_agent/tool.hpp:283 的示例失效了");
-    CHECK_MSG((s.at(1).value("name", std::string{})) == ("read"), "include/mini_agent/tool.hpp:284 的示例失效了");
-    CHECK_MSG((s.at(2).value("name", std::string{})) == ("write"), "include/mini_agent/tool.hpp:285 的示例失效了");
-    CHECK_MSG((s.at(0).contains("description")) == (true), "include/mini_agent/tool.hpp:286 的示例失效了");
-    CHECK_MSG((s.at(0).contains("input_schema")) == (true), "include/mini_agent/tool.hpp:287 的示例失效了");
-    CHECK_MSG((r.schemas().dump()) == (s.dump()), "include/mini_agent/tool.hpp:288 的示例失效了");
-    CHECK_MSG((ToolRegistry{}.schemas().is_array()) == (true), "include/mini_agent/tool.hpp:289 的示例失效了");
+    CHECK_MSG((s.is_array()) == (true), "include/mini_agent/tool.hpp:343 的示例失效了");
+    CHECK_MSG((s.size()) == (3u), "include/mini_agent/tool.hpp:344 的示例失效了");
+    CHECK_MSG((s.at(0).value("name", std::string{})) == ("bash"), "include/mini_agent/tool.hpp:345 的示例失效了");
+    CHECK_MSG((s.at(1).value("name", std::string{})) == ("read"), "include/mini_agent/tool.hpp:346 的示例失效了");
+    CHECK_MSG((s.at(2).value("name", std::string{})) == ("write"), "include/mini_agent/tool.hpp:347 的示例失效了");
+    CHECK_MSG((s.at(0).contains("description")) == (true), "include/mini_agent/tool.hpp:348 的示例失效了");
+    CHECK_MSG((s.at(0).contains("input_schema")) == (true), "include/mini_agent/tool.hpp:349 的示例失效了");
+    CHECK_MSG((r.schemas().dump()) == (s.dump()), "include/mini_agent/tool.hpp:350 的示例失效了");
+    CHECK_MSG((ToolRegistry{}.schemas().is_array()) == (true), "include/mini_agent/tool.hpp:351 的示例失效了");
 }
 
 /// From include/mini_agent/tools/builtin.hpp:52
