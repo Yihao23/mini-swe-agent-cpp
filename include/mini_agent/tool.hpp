@@ -159,7 +159,10 @@ struct ToolContext {
 
     Memory* memory = nullptr;                 ///< Stage 5; null until then.
     SkillRegistry* skills = nullptr;          ///< Stage 5; null until then.
-    BackgroundManager* background = nullptr;  ///< Stage 6; null until then.
+    /// @brief Background tasks (Stage 6).
+    /// @note Null inside a sub-agent — a background task started there would
+    ///       outlive the agent that could report on it.
+    BackgroundManager* background = nullptr;
     ToolRegistry* registry = nullptr;         ///< For tools that need the tool list.
 
     /// @brief Launches a sub-agent (Stage 6).

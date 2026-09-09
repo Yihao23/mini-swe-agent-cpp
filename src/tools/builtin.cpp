@@ -22,6 +22,7 @@
 #include <regex>
 #include <system_error>
 
+#include "mini_agent/background.hpp"
 #include "mini_agent/config.hpp"
 #include "mini_agent/memory.hpp"
 #include "mini_agent/process.hpp"
@@ -59,6 +60,13 @@ int int_arg(const Json& args, const char* key, int fallback) {
     if (!args.is_object()) return fallback;
     const auto it = args.find(key);
     return (it != args.end() && it->is_number_integer()) ? it->get<int>() : fallback;
+}
+
+/// 取一个布尔参数；缺失或类型不对都退回 fallback。
+bool bool_arg(const Json& args, const char* key, bool fallback) {
+    if (!args.is_object()) return fallback;
+    const auto it = args.find(key);
+    return (it != args.end() && it->is_boolean()) ? it->get<bool>() : fallback;
 }
 
 /// @brief Reads a file with line numbers, or lists a directory.
@@ -950,7 +958,9 @@ class BashTool final : public Tool {
         //    不写的话模型会用 `cat`、`sed -i`、`find`，绕开所有做了边界检查的工具。
         return "在工作目录里执行一条 shell 命令，返回合并后的 stdout+stderr 和退出码。"
                "用来跑测试、构建、git 等。"
-               "读文件用 read、改文件用 edit、找文件用 glob —— 不要用 cat/sed/find 代替。";
+               "读文件用 read、改文件用 edit、找文件用 glob —— 不要用 cat/sed/find 代替。"
+               "跑得久的（dev server、watch、全套测试）加 run_in_background，"
+               "立刻拿到任务 id，之后用 bash_output 读输出、kill_task 停掉。";
     }
 
     Json input_schema() const override {
@@ -959,7 +969,11 @@ class BashTool final : public Tool {
             {"properties",
              {{"command", {{"type", "string"}, {"description", "要执行的 shell 命令"}}},
               {"timeout_sec",
-               {{"type", "integer"}, {"description", "最多等多少秒，不填用配置里的默认值"}}}}},
+               {{"type", "integer"}, {"description", "最多等多少秒，不填用配置里的默认值"}}},
+              {"run_in_background",
+               {{"type", "boolean"},
+                {"description", "true = 丢到后台，立刻返回任务 id，不等它结束。"
+                                "用于 dev server、watch、跑很久的测试"}}}}},
             {"required", Json::array({"command"})},
         };
     }
@@ -979,6 +993,31 @@ class BashTool final : public Tool {
         if (!command) return ToolResult::error("缺少 command 参数（必须是字符串）");
         const auto& cmd = *command;
         if (cmd.empty()) return ToolResult::error("command 不能为空");
+
+        // ⚠️ 分叉放在**沙箱之后**（requires_permission 已经是 true，subject 还是
+        //    那条命令）。前台还是后台不改变「这条命令危不危险」—— 恰恰相反：
+        //    后台跑的东西没人盯着，闸门更不能松。
+        if (bool_arg(args, "run_in_background", false)) {
+            if (!ctx.background) return ToolResult::error("当前上下文不支持后台任务");
+            // label 只给人看（render_list / 通知里的那一行），截短免得刷屏。
+            std::string label = cmd.substr(0, 60);
+            if (cmd.size() > 60) label += "…";
+            try {
+                const auto id = ctx.background->start(cmd, ctx.cfg->workdir, std::move(label));
+                return ToolResult{
+                    .content = std::format(
+                        "已在后台启动，任务 id: {}\n"
+                        "用 bash_output({}) 读新输出，kill_task({}) 停掉它。\n"
+                        "它结束时你会在下一轮开头收到通知，不用轮询。",
+                        id, id, id),
+                    .is_error = false,
+                    .metadata = Json{{"task_id", id}},
+                };
+            } catch (const std::exception& e) {
+                // 并发上限满了会抛。这是**可恢复**的：让模型先收掉一个再来。
+                return ToolResult::error(e.what());
+            }
+        }
 
         const int cfg_timeout = ctx.cfg->tool_timeout_sec;
         const int want = int_arg(args, "timeout_sec", cfg_timeout);
@@ -1013,6 +1052,106 @@ class BashTool final : public Tool {
 
 }  // namespace
 
+/// @brief Reads what a background task has produced since the last read.
+///
+/// @note Only the new part. Handing back the whole buffer every turn would
+///       refill the context with lines the model has already read — the same
+///       reason drain() advances a cursor instead of just returning a copy.
+/// @note Read-only, and needs no permission: the command it reports on already
+///       went through the gate when bash started it. Gating the reading of
+///       output the model is entitled to would only teach it to avoid the tool.
+class BashOutputTool final : public Tool {
+  public:
+    std::string_view name() const override { return "bash_output"; }
+
+    std::string_view description() const override {
+        return "读一个后台任务自上次读取以来的新输出。"
+               "不填 task_id 就列出所有后台任务及其状态。"
+               "任务结束时你会自动收到通知 —— 不需要靠反复调这个来轮询。";
+    }
+
+    Json input_schema() const override {
+        return Json{
+            {"type", "object"},
+            {"properties",
+             {{"task_id",
+               {{"type", "string"},
+                {"description", "bash(run_in_background) 返回的 id，如 bg_1。"
+                                "不填则列出全部任务"}}}}},
+            {"required", Json::array()},
+        };
+    }
+
+    bool read_only() const override { return true; }
+    bool requires_permission() const override { return false; }
+
+    ToolResult run(const Json& args, ToolContext& ctx) override {
+        if (!ctx.background) return ToolResult::error("当前上下文不支持后台任务");
+
+        const auto id = str_arg(args, "task_id");
+        if (!id || id->empty()) {
+            const auto listing = ctx.background->render_list();
+            return ToolResult{.content = listing.empty() ? "没有后台任务。" : listing};
+        }
+
+        const auto out = ctx.background->drain(*id);
+        // ⚠️ 空字符串有两种意思：任务不存在，和任务还没产出新东西。分不清的话
+        //    模型会对着一个打错的 id 一直等下去。用列表把真相摊开。
+        if (out.empty())
+            return ToolResult{.content = "(没有新输出)\n\n" + ctx.background->render_list()};
+        return ToolResult{.content = out};
+    }
+};
+
+/// @brief Stops one background task, or every one of them.
+///
+/// @note Not read-only and permission-gated: killing a dev server is a real
+///       side effect, and a rule like `deny kill_task(bg_1)` has to be
+///       expressible — which is why subject() is the task id.
+class KillTaskTool final : public Tool {
+  public:
+    std::string_view name() const override { return "kill_task"; }
+
+    std::string_view description() const override {
+        return "停掉一个后台任务（连同它起的子进程）。填 all 停掉全部。"
+               "不再需要的 dev server、watch 要主动停 —— 它们不会自己退出。";
+    }
+
+    Json input_schema() const override {
+        return Json{
+            {"type", "object"},
+            {"properties",
+             {{"task_id",
+               {{"type", "string"}, {"description", "要停的任务 id；all 表示全部"}}}}},
+            {"required", Json::array({"task_id"})},
+        };
+    }
+
+    bool read_only() const override { return false; }
+    bool requires_permission() const override { return true; }
+
+    /// 审查对象是任务 id —— 只有一个字符串参数，默认实现也对，仍然写明。
+    std::string subject(const Json& args) const override {
+        return str_arg(args, "task_id").value_or(std::string{});
+    }
+
+    ToolResult run(const Json& args, ToolContext& ctx) override {
+        if (!ctx.background) return ToolResult::error("当前上下文不支持后台任务");
+
+        const auto id = str_arg(args, "task_id");
+        if (!id || id->empty()) return ToolResult::error("缺少 task_id 参数");
+
+        if (*id == "all") {
+            ctx.background->kill_all();
+            return ToolResult{.content = "已停掉全部后台任务。"};
+        }
+        ctx.background->kill(*id);
+        // kill() 对不存在的 id 是静默忽略的（契约如此）。把列表附上，模型自己
+        // 就能看出是打错了 id 还是真停掉了 —— 不用再多一次工具调用。
+        return ToolResult{.content = "已请求停止 " + *id + "。\n\n" + ctx.background->render_list()};
+    }
+};
+
 ToolPtr make_read_tool() { return std::make_shared<ReadTool>(); }
 ToolPtr make_write_tool() { return std::make_shared<WriteTool>(); }
 ToolPtr make_edit_tool() { return std::make_shared<EditTool>(); }
@@ -1024,8 +1163,8 @@ ToolPtr make_skill_tool() { return std::make_shared<SkillTool>(); }
 ToolPtr make_memory_tool() { return std::make_shared<MemoryTool>(); }
 ToolPtr make_task_tool() { return std::make_shared<TaskTool>(); }
 ToolPtr make_task_graph_tool() { return std::make_shared<TaskGraphTool>(); }
-ToolPtr make_bash_output_tool() { todo("Stage 6: bash_output"); }
-ToolPtr make_kill_task_tool() { todo("Stage 6: kill_task"); }
+ToolPtr make_bash_output_tool() { return std::make_shared<BashOutputTool>(); }
+ToolPtr make_kill_task_tool() { return std::make_shared<KillTaskTool>(); }
 
 std::vector<ToolPtr> builtin_tools(const Config& cfg) {
     // 顺序无所谓 —— ToolRegistry::schemas() 会按名字排序（缓存前缀要稳定）。
@@ -1045,10 +1184,15 @@ std::vector<ToolPtr> builtin_tools(const Config& cfg) {
         v.push_back(make_task_graph_tool());
     }
 
-    // TODO(Stage 4/6): 下面这些工厂现在还是 todo()，一调就抛。开关默认为 true，
-    //   所以要等对应 Stage 写完再打开，否则默认配置下 agent 直接起不来。
-    // v.push_back(make_bash_output_tool());   // Stage 6：BackgroundManager 还没写
-    // v.push_back(make_kill_task_tool());     // 同上
+    // 后台任务的两个配套工具。⚠️ 它们**不看 enable_subagents** —— 后台任务和
+    // 子 agent 是两回事：一个是"这个进程慢慢跑"，一个是"另一个 agent 去想"。
+    // 真正决定它们能不能用的是 ctx.background 是不是 nullptr（子 agent 里就是）。
+    v.push_back(make_bash_output_tool());
+    v.push_back(make_kill_task_tool());
+
+    // TODO(Stage 4): todo 工厂还是 todo()，一调就抛。开关默认为 true，所以要等
+    //   写完再打开，否则默认配置下 agent 直接起不来。
+    // v.push_back(make_todo_tool());
     return v;
 }
 

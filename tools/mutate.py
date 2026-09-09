@@ -824,6 +824,44 @@ MUTANTS = [
         expect=["model_cannot_raise_the_timeout"],
         note="模型可以自己解除超时限制",
     ),
+
+    # ── Stage 6：后台任务的三条工具路径 ─────────────────────────────────────
+    dict(
+        name="run_in_background 用 args.value 取（类型不对就抛）",
+        file="src/tools/builtin.cpp",
+        edits=[('if (bool_arg(args, "run_in_background", false)) {',
+                'if (args.is_object() && args.value("run_in_background", false)) {')],
+        binaries=["test_bg_tools"],
+        expect=["the_background_switch_must_be_a_real_boolean"],
+        note="模型给字符串 true 会撞上 json::type_error，"
+             "它看到的只是一句没头没尾的 what()",
+    ),
+    dict(
+        name="没有新输出时不附任务列表",
+        file="src/tools/builtin.cpp",
+        edits=[('        if (out.empty())\n            return ToolResult{.content = "(没有新输出)\\n\\n" + ctx.background->render_list()};', '        if (out.empty()) return ToolResult{.content = "(没有新输出)"};')],
+        binaries=["test_bg_tools"],
+        expect=["nothing_new_is_told_apart_from_a_wrong_id"],
+        note="打错的 id 和还没输出的任务长得一模一样，模型会一直等下去",
+    ),
+    dict(
+        name="kill_task 的 subject 用默认实现",
+        file="src/tools/builtin.cpp",
+        edits=[('    /// 审查对象是任务 id —— 只有一个字符串参数，默认实现也对，仍然写明。\n    std::string subject(const Json& args) const override {\n        return str_arg(args, "task_id").value_or(std::string{});\n    }\n\n    ToolResult run', '    ToolResult run')],
+        binaries=["test_bg_tools"],
+        expect=["kill_task_is_reviewed_by_task_id"],
+        note="今天默认实现碰巧也返回 task_id；哪天多一个字符串参数，"
+             "沙箱规则就会静默匹配到错的东西",
+    ),
+    dict(
+        name="turn_context 拿了通知却不用",
+        file="src/prompt.cpp",
+        edits=[('out += "后台任务状态变化：\\n";', 'out += "";')],
+        binaries=["test_bg_tools"],
+        expect=["a_finished_task_is_injected_into_the_next_turn_exactly_once"],
+        note="notifications() 是有副作用的读 —— 结果丢掉，"
+             "那条消息就永远不会再来，模型在等一个不存在的信号",
+    ),
 ]
 
 

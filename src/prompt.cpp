@@ -6,6 +6,7 @@
 
 #include <fstream>
 
+#include "mini_agent/background.hpp"
 #include "mini_agent/memory.hpp"
 #include "mini_agent/skills.hpp"
 
@@ -115,8 +116,17 @@ std::string turn_context(BackgroundManager* background, const Json& todos) {
     // ⚠️ 这里是动态内容的唯一出口。放进 system 的话缓存每轮作废。
     std::string out;
 
-    // TODO(Stage 6): background->notifications() —— 每个任务只通知一次
-    (void)background;
+    // ⚠️ notifications() 有副作用：它把任务标成"已通知"。所以这里**只能调一次**，
+    //    而且调了就必须把结果用掉 —— 丢掉的话那条通知永远不会再出现，模型会
+    //    一直等一个不会来的消息。
+    if (background) {
+        const auto news = background->notifications();
+        if (!news.empty()) {
+            out += "后台任务状态变化：\n";
+            for (const auto& n : news) out += "  " + n + "\n";
+            out += "\n";
+        }
+    }
 
     if (todos.is_array() && !todos.empty()) {
         out += "当前 todo：\n";

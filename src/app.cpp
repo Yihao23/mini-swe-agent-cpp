@@ -27,6 +27,13 @@ struct App::Impl {
       std::optional<Memory> memory;
       std::optional<SkillRegistry> skills;
 
+      // ⚠️ 也必须在 ctx 之前 —— 但更要紧的是它在 **agent 之后析构**。
+      //    成员逆序析构：agent → ctx → session → registry → skills → memory →
+      //    background。也就是说 agent 已经不可能再碰后台任务了，这时才去杀进程。
+      //    反过来（background 声明在 agent 之后）就是：进程全被杀掉了，agent
+      //    才开始析构 —— 中间那一段它会对着一堆已经死掉的 pid 工作。
+      std::optional<BackgroundManager> background;
+
       ToolRegistry registry;
       Session session;
       ToolContext ctx;                  // 指向上面几个
@@ -49,6 +56,10 @@ struct App::Impl {
       if (cfg.enable_memory) memory.emplace(cfg.memory_dir());
       if (cfg.enable_skills) skills.emplace(cfg.skills_dirs());
 
+      // Stage 6：后台任务。没有开关 —— bash 的 run_in_background 参数总是在的，
+      // 而"能不能用"由 ctx.background 是否为空决定（子 agent 里就是空）。
+      background.emplace();
+
       for (auto& t : builtin_tools(cfg))            // ⑤ 注册工具
           registry.add(std::move(t));
 
@@ -58,6 +69,7 @@ ctx.cfg      = &cfg;                         // ⑥ 接线
         ctx.registry = &registry;
         ctx.memory   = memory ? &*memory : nullptr;
         ctx.skills   = skills ? &*skills : nullptr;
+        ctx.background = &*background;
 
         // ⑦ Stage 6：派子 agent 的入口。
         //
@@ -92,7 +104,7 @@ App::~App() = default;
   LlmClient& App::llm()             { return *impl_->llm; }
   Memory* App::memory()             { return impl_->memory ? &*impl_->memory : nullptr; }
   SkillRegistry* App::skills()      { return impl_->skills ? &*impl_->skills : nullptr; }
-  BackgroundManager* App::background() { return nullptr; }// Stage 6
+  BackgroundManager* App::background() { return &*impl_->background; }
   const Config& App::cfg() const    { return impl_->cfg; }
   const std::vector<std::string>& App::warnings() const { return impl_->warnings; }
 

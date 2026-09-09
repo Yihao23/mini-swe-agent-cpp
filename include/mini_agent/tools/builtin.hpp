@@ -251,10 +251,13 @@ ToolPtr make_grep_tool();
 ///       Honoured as given, the model could lift its own limit.
 /// @note A non-zero exit is an error **with the output kept** — a compiler
 ///       error or a failing test is exactly what the model needs to read next.
-///
+/// @note `run_in_background: true` hands the command to BackgroundManager and
+///       returns a task id at once. The fork sits **after** the sandbox, and
+///       deliberately: nobody is watching a background command, so the gate
+///       matters more there, not less.
 ///
 /// @return The `bash` tool.
-/// 参数：command，可选 timeout_sec。
+/// 参数：command，可选 timeout_sec、run_in_background。
 ToolPtr make_bash_tool();
 
 // --- Stage 4：agent 自己维护的计划清单，每轮通过 reminder 回灌 ---
@@ -346,10 +349,18 @@ ToolPtr make_task_graph_tool();
 /// @return The `bash_output` tool.
 /// @note Returns only new output. Returning everything each turn would refill
 ///       the context with lines the model has already read.
+/// @note No task_id lists every task. And "nothing new" comes back with that
+///       listing attached — otherwise a mistyped id and a quiet task look
+///       identical, and the model waits forever on the wrong one.
+/// @note Read-only and ungated: the command already went through the sandbox
+///       when bash started it.
 ToolPtr make_bash_output_tool();
 
-/// @brief `kill_task` — stop a background task.
+/// @brief `kill_task` — stop a background task, or all of them with "all".
 /// @return The `kill_task` tool.
+/// @note subject() is the task id, so `deny kill_task(bg_1)` is expressible.
+/// @note An unknown id is not an error — that is BackgroundManager::kill's
+///       contract, and reporting one would send the model off to fix nothing.
 ToolPtr make_kill_task_tool();
 
 /// @brief The builtin set for one agent, assembled from the config switches.

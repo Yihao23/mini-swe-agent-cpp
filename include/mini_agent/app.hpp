@@ -158,7 +158,9 @@ class App {
     /// @return nullptr when disabled or not yet implemented.
     SkillRegistry* skills();
     /// @brief Background tasks (Stage 6).
-    /// @return nullptr when not yet implemented.
+    /// @return Never null — always built, since bash's run_in_background is
+    ///         always offered. What narrows it is the ToolContext a sub-agent
+    ///         gets, not this.
     BackgroundManager* background();
 
     /// @brief The configuration every layer was built from.
