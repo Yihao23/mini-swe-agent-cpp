@@ -7,6 +7,7 @@
 
 #include <cerrno>
 #include <cstring>
+#include <vector>
 
 namespace mini {
 
@@ -55,6 +56,72 @@ SpawnedProcess spawn_process(const std::string& command, const fs::path& cwd) {
 
     out.pid = pid;
     out.read_fd = fds[0];
+    out.ok = true;
+    return out;
+}
+
+PipedProcess spawn_piped(const std::string& command, const std::vector<std::string>& args,
+                         const fs::path& cwd) {
+    PipedProcess out;
+
+    int to_child[2], from_child[2];
+    if (::pipe(to_child) != 0) {
+        out.error = std::string("pipe() 失败: ") + std::strerror(errno);
+        return out;
+    }
+    if (::pipe(from_child) != 0) {
+        const int e = errno;
+        ::close(to_child[0]);
+        ::close(to_child[1]);
+        out.error = std::string("pipe() 失败: ") + std::strerror(e);
+        return out;
+    }
+
+    // ⚠️ argv 必须在 fork **之前**搭好 —— fork 之后不能碰分配器。
+    //    这些 const char* 指向的 std::string 都还活着（args 是引用参数）。
+    std::vector<const char*> argv;
+    argv.reserve(args.size() + 2);
+    argv.push_back(command.c_str());
+    for (const auto& a : args) argv.push_back(a.c_str());
+    argv.push_back(nullptr);
+    const char* const cwd_c = cwd.c_str();
+
+    const pid_t pid = ::fork();
+    if (pid < 0) {
+        const int e = errno;
+        ::close(to_child[0]);
+        ::close(to_child[1]);
+        ::close(from_child[0]);
+        ::close(from_child[1]);
+        out.error = std::string("fork() 失败: ") + std::strerror(e);
+        return out;
+    }
+
+    if (pid == 0) {
+        // ── 子进程 ───────────────────────────────────────────────────────────
+        ::setpgid(0, 0);
+        ::close(to_child[1]);       // 写端归父进程
+        ::close(from_child[0]);     // 读端归父进程
+        if (::dup2(to_child[0], STDIN_FILENO) < 0) ::_exit(126);
+        if (::dup2(from_child[1], STDOUT_FILENO) < 0) ::_exit(126);
+        // ⚠️ stderr **不动**。合进 stdout 的话 server 的日志会掺进 JSON-RPC 流。
+        ::close(to_child[0]);
+        ::close(from_child[1]);
+        if (::chdir(cwd_c) != 0) ::_exit(126);
+        ::execvp(argv[0], const_cast<char* const*>(argv.data()));
+        ::_exit(127);               // execvp 只有失败才返回
+    }
+
+    // ── 父进程 ───────────────────────────────────────────────────────────────
+    ::setpgid(pid, pid);
+    ::close(to_child[0]);           // 父进程不读子进程的 stdin
+    // ⚠️ 这一句是最容易漏的：不关的话子进程的 stdout 永远有一个写者（我们自己），
+    //    server 退出了我们也读不到 EOF —— 表现是等响应等到超时。
+    ::close(from_child[1]);
+
+    out.pid = pid;
+    out.write_fd = to_child[1];
+    out.read_fd = from_child[0];
     out.ok = true;
     return out;
 }

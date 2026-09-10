@@ -13,6 +13,7 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace mini {
 
@@ -38,5 +39,34 @@ struct SpawnedProcess {
 ///
 /// **不抛异常** —— 失败反映在 ok/error 里。
 SpawnedProcess spawn_process(const std::string& command, const fs::path& cwd);
+
+/// 起好的双向子进程。
+struct PipedProcess {
+    pid_t pid = -1;      ///< 也是进程组 id
+    int write_fd = -1;   ///< 写这里 → 子进程的 stdin。调用方负责 close
+    int read_fd = -1;    ///< 读这里 ← 子进程的 stdout。调用方负责 close
+    bool ok = false;
+    std::string error;
+};
+
+/// fork + execvp 一个程序，stdin 和 stdout 各接一根管道。
+///
+/// 和 spawn_process 的三处不同，每一处都是 MCP 逼出来的：
+///
+///   1. **两根管道**，父进程既能写也能读 —— JSON-RPC 是一问一答。
+///   2. **stderr 不合并**，原样继承父进程的。MCP server 往 stderr 打日志，
+///      合进 stdout 就等于往 JSON-RPC 流里掺垃圾，下一次 getline 拿到的是
+///      一行日志而不是一条消息。⚠️ 这是这个函数存在的**主要理由**。
+///   3. **execvp 而不是 sh -c**。配置给的是 command + args 数组，直接 exec
+///      省掉一层 shell，也就没有引号和 $ 展开的问题 —— 参数里带空格的路径
+///      不会被拆开。
+///
+/// ⚠️ spawn_process 的三个坑这里一个不少：父进程要关掉两根管道各自的另一端、
+///    子进程要 setpgid(0,0)、fork 到 exec 之间只能调 async-signal-safe 的东西
+///    （所以 argv 在 fork 之前就搭好）。
+///
+/// **不抛异常** —— 失败反映在 ok/error 里。
+PipedProcess spawn_piped(const std::string& command, const std::vector<std::string>& args,
+                         const fs::path& cwd);
 
 }  // namespace mini

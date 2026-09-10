@@ -34,6 +34,12 @@ struct App::Impl {
       //    才开始析构 —— 中间那一段它会对着一堆已经死掉的 pid 工作。
       std::optional<BackgroundManager> background;
 
+      // ⚠️ 必须在 registry **之前**声明。析构逆序 → registry 先死，远程工具
+      //    随之释放它们持有的 shared_ptr<McpClient>，然后才轮到这里放掉最后
+      //    一份引用、server 进程退出。反过来的话，server 先被杀掉，而工具还
+      //    在注册表里挂着 —— 中间那一段每次调用都写进一根已关闭的管道。
+      McpLoadResult mcp;
+
       ToolRegistry registry;
       Session session;
       ToolContext ctx;                  // 指向上面几个
@@ -63,7 +69,16 @@ struct App::Impl {
       for (auto& t : builtin_tools(cfg))            // ⑤ 注册工具
           registry.add(std::move(t));
 
-ctx.cfg      = &cfg;                         // ⑥ 接线
+      // ⑥ Stage 7：外部 MCP server 提供的工具，和内置工具进同一张表。
+      //    ⚠️ 起不来的 server 只记 warning，不抛 —— 为了 mcp.json 里的一行
+      //    写错就不让 agent 启动，代价比收益大得多。
+      if (cfg.enable_mcp) {
+          mcp = load_mcp_servers(cfg.mcp_config(), cfg.workdir);
+          for (auto& t : mcp.tools) registry.add(t);
+          for (auto& e : mcp.errors) warnings.push_back(e);
+      }
+
+ctx.cfg      = &cfg;                         // ⑦ 接线
         ctx.sandbox  = &sandbox;
         ctx.session  = &session;
         ctx.registry = &registry;
@@ -71,7 +86,7 @@ ctx.cfg      = &cfg;                         // ⑥ 接线
         ctx.skills   = skills ? &*skills : nullptr;
         ctx.background = &*background;
 
-        // ⑦ Stage 6：派子 agent 的入口。
+        // ⑧ Stage 6：派子 agent 的入口。
         //
         // ⚠️ 捕获 this（这里是 Impl*）。Impl 由 App 的 unique_ptr 持有，而 App
         //    是**不可移动**的（成员互指），所以这个地址在整个 App 生命周期内

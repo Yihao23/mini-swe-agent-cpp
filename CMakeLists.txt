@@ -112,5 +112,10 @@ foreach(test_src ${TEST_SOURCES})
   add_executable(${test_name} ${test_src})
   target_link_libraries(${test_name} PRIVATE mini_agent_core)
   target_include_directories(${test_name} PRIVATE tests)
+  # 测试要找 tests/ 下的数据文件（mock_mcp_server.py）。ctest 从 build/ 里跑，
+  # 相对路径靠不住 —— 编译期把源码树的位置烧进去。⚠️ 展开的是 CMake 变量，
+  # 仓库里不会留下任何人的绝对路径。
+  target_compile_definitions(${test_name} PRIVATE
+                             MINI_AGENT_TEST_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests")
   add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()

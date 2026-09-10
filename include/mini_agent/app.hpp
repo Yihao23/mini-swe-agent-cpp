@@ -30,6 +30,8 @@
 //     memory        │  optional —— 关掉就不建，连目录都不建
 //     skills        │
 //     background    │  ⚠️ 也在 ctx 之前，但真正要紧的是它在 agent **之后**析构
+//     mcp           │  ⚠️ 要在 registry **之前** —— 远程工具持有 server 的
+//                   │     shared_ptr，工具必须先死，server 才能死
 //     registry      │
 //     session       │
 //     ctx          ─┘  ⚠️ 里面全是指向上面那些的**裸指针**
@@ -88,7 +90,7 @@
 //      "指针天然有效"就不成立了 —— 那时移动会让 ctx 指向搬空的旧对象。
 //      规则先立在这儿，省得那一天再想起来。
 //
-// ── 构造做的七件事 ──────────────────────────────────────────────────────────
+// ── 构造做的八件事 ──────────────────────────────────────────────────────────
 //
 //   ① cfg.ensure_dirs()               建目录（看 enable_* 开关）
 //   ② llm 为空 → AnthropicClient       测试传 FakeLlm 进来就跳过
@@ -96,8 +98,10 @@
 //   ④ memory / skills                  开关打开才建
 //        background                    没有开关 —— 总是建
 //   ⑤ builtin_tools(cfg) → registry    工具表也按开关拼
-//   ⑥ ctx 的十个字段接线
-//   ⑦ ctx.spawn = lambda               Stage 6；捕获 this
+//   ⑥ load_mcp_servers() → registry    外部 server 的工具进同一张表；
+//                                      起不来的记进 warnings，不抛
+//   ⑦ ctx 的十个字段接线
+//   ⑧ ctx.spawn = lambda               Stage 6；捕获 this
 //        ▼
 //   agent = make_unique<Agent>(...)    最后一步，此刻一切就绪
 //
