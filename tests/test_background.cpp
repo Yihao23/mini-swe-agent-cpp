@@ -49,6 +49,21 @@ bool wait_until(F&& cond, std::chrono::milliseconds limit = 3000ms) {
 /// 进程还活着？kill(pid,0) 不发信号，只做存在性检查。
 bool alive(pid_t pid) { return ::kill(pid, 0) == 0; }
 
+/// 当前进程打开着几个 fd。
+///
+/// ⚠️ 只在 Linux 上有 /proc。这个项目本来就只跑 Linux（fork/poll//bin/sh），
+///    所以直接用；数不出来就返回 0，用它的那条用例会跳过。
+std::size_t open_fds() {
+    std::error_code ec;
+    const fs::path d = "/proc/self/fd";
+    if (!fs::is_directory(d, ec)) return 0;
+    std::size_t n = 0;
+    // ⚠️ 迭代器自己也占一个 fd。前后两次数法一样，所以看**差值**就没问题。
+    for (auto it = fs::directory_iterator(d, ec); it != fs::directory_iterator(); it.increment(ec))
+        ++n;
+    return n;
+}
+
 }  // namespace
 
 // ── 异步：start 立刻返回 ────────────────────────────────────────────────────
@@ -371,6 +386,38 @@ TEST(concurrent_drains_do_not_corrupt_anything) {
     collected += bg.drain(id);
     CHECK_MSG(!collected.empty(), "边写边读要能拿到内容");
     CHECK_MSG(has(collected, "line"), "内容不能是乱的");
+}
+
+TEST(a_finished_task_closes_its_pipe) {
+    if (open_fds() == 0) return;        // 没有 /proc，跳过
+
+    BackgroundManager bg;
+    const auto wd = workdir();
+
+    // 先跑一个热身：第一次起线程会分配栈、libc 会开一些东西，
+    // 那些一次性开销不该算进泄漏里。
+    const auto warm = bg.start("true", wd, "热身");
+    CHECK(wait_until([&] { return has(bg.render_list(), "已结束"); }));
+    bg.drain(warm);
+
+    const std::size_t before = open_fds();
+
+    // ⚠️ 十个任务全部跑完。**不调 notifications()**，所以一条都不会被
+    //    reap_finished() 清掉 —— 记录全留在 map 里。fd 该关的还是要关。
+    for (int i = 0; i < 10; ++i) {
+        const auto id = bg.start("echo x", wd, "任务 " + std::to_string(i));
+        CHECK(!id.empty());
+        CHECK(wait_until([&] { return has(bg.drain(id), "x"); }));
+    }
+
+    const std::size_t after = open_fds();
+    // ⚠️ 管道读端要在读线程收尾时关掉。不关的话这里正好多出 10 个 ——
+    //    而且那些记录被清理之后，fd 连同记录一起消失，再也没人能关。
+    //    跑久了撞上 RLIMIT_NOFILE，报错却发生在一个毫不相干的 open() 上。
+    CHECK_MSG(after <= before + 2,
+              ("跑完 10 个任务后 fd 数从 " + std::to_string(before) + " 涨到 " +
+               std::to_string(after) + " —— 管道读端没关")
+                  .c_str());
 }
 
 int main() { return mt::run_all(); }

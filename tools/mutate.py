@@ -468,6 +468,15 @@ MUTANTS = [
         expect=['an_unreported_task_is_never_reaped'],
         note='模型永远不知道那个任务结束了 —— 它还在等一条不会来的消息',
     ),
+    dict(
+        name="读线程收尾时不关管道读端",
+        file="src/background.cpp",
+        edits=[('        if (t->read_fd >= 0) {\n            ::close(t->read_fd);\n            t->read_fd = -1;\n        }', '')],
+        binaries=["test_background"],
+        expect=["a_finished_task_closes_its_pipe"],
+        note="每起一个后台任务泄漏一个 fd。记录被清理后那个 fd 再也没人能关，"
+             "跑久了撞 RLIMIT_NOFILE，而报错发生在一个毫不相干的 open() 上",
+    ),
     # ── Stage 6：子 agent ────────────────────────────────────────────────
     dict(
         name='子 agent 用父的 Session 跑循环',

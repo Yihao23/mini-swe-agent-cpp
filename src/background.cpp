@@ -127,6 +127,22 @@ struct BackgroundManager::Impl {
         t->finished = true;
         if (WIFEXITED(status)) t->exit_code = WEXITSTATUS(status);
         else if (WIFSIGNALED(status)) t->exit_code = 128 + WTERMSIG(status);
+
+        // ⚠️ 管道读端在这里关，而且**只能**在这里关。
+        //
+        //   * 只能在这里：这条线程是唯一读它的人。主线程去关的话，我们可能
+        //     正卡在 read() 上 —— 而那个 fd 号会被立刻回收给下一个 open()，
+        //     于是这条线程读到的是别人的数据。这类 bug 没有任何症状可循。
+        //   * 必须在这里：不关就是每起一个后台任务泄漏一个 fd。任务被
+        //     reap_finished() 清掉之后，那个 fd 连同它的记录一起消失，
+        //     再也没人能关。跑久了会撞上 RLIMIT_NOFILE，而报错发生在
+        //     一个完全无关的 open() 上。
+        //
+        //   置 -1 是为了让 I6 可检验：pid < 0 ⟺ read_fd < 0。
+        if (t->read_fd >= 0) {
+            ::close(t->read_fd);
+            t->read_fd = -1;
+        }
     }
 };
 
