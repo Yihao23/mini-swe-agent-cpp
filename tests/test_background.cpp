@@ -64,6 +64,15 @@ std::size_t open_fds() {
     return n;
 }
 
+/// 这个任务结束了吗？
+///
+/// ⚠️ 针要带上 " [" —— render_list() 的格式是 `  {id} [{状态}] {label}`。
+///    光找 id 的话，"bg_1" 会匹配上 "bg_10"..."bg_19"。同一个坑这份文件里
+///    栽过一次了。
+bool finished(const BackgroundManager& bg, const std::string& id) {
+    return has(bg.render_list(), id + " [已结束");
+}
+
 }  // namespace
 
 // ── 异步：start 立刻返回 ────────────────────────────────────────────────────
@@ -397,25 +406,40 @@ TEST(a_finished_task_closes_its_pipe) {
     // 先跑一个热身：第一次起线程会分配栈、libc 会开一些东西，
     // 那些一次性开销不该算进泄漏里。
     const auto warm = bg.start("true", wd, "热身");
-    CHECK(wait_until([&] { return has(bg.render_list(), "已结束"); }));
-    bg.drain(warm);
+    CHECK(wait_until([&] { return finished(bg, warm); }));
 
     const std::size_t before = open_fds();
 
-    // ⚠️ 十个任务全部跑完。**不调 notifications()**，所以一条都不会被
-    //    reap_finished() 清掉 —— 记录全留在 map 里。fd 该关的还是要关。
+    // ⚠️ 等的是 **finished**，不是"输出到了"。两者差着 pump 收尾的一整段：
+    //    read() 拿到 EOF → waitpid → 设 finished → close(read_fd)。
+    //    等输出的话，最后一个任务的 fd 很可能在下面测 after 时还开着 ——
+    //    那样这条用例过不过就成了时序运气。
+    //
+    //    这个同步点之所以可靠，是因为 close 和 `finished = true` 写在**同一个
+    //    临界区**里：任何人拿到锁看见 finished，就必然看见 fd 已经关了。
+    //    I7 就是这样变得可观测的。
+    //
+    //    顺带也堵住第二个问题：等输出的话 running 计数会累积，10 次循环撞上
+    //    kMaxRunning = 8，start() 会返回空 id。
+    //
+    // ⚠️ 全程**不调 notifications()**，所以一条都不会被 reap_finished() 清掉 ——
+    //    记录全留在 map 里。这样测的就纯粹是"读线程有没有关"这一件事。
+    //    也顺便堵掉一个错觉：记录被删掉时 fd **不会**跟着关，
+    //    BackgroundTask 没有析构函数去关它。
     for (int i = 0; i < 10; ++i) {
         const auto id = bg.start("echo x", wd, "任务 " + std::to_string(i));
         CHECK(!id.empty());
-        CHECK(wait_until([&] { return has(bg.drain(id), "x"); }));
+        CHECK(wait_until([&] { return finished(bg, id); }));
     }
 
     const std::size_t after = open_fds();
-    // ⚠️ 管道读端要在读线程收尾时关掉。不关的话这里正好多出 10 个 ——
-    //    而且那些记录被清理之后，fd 连同记录一起消失，再也没人能关。
-    //    跑久了撞上 RLIMIT_NOFILE，报错却发生在一个毫不相干的 open() 上。
-    CHECK_MSG(after <= before + 2,
-              ("跑完 10 个任务后 fd 数从 " + std::to_string(before) + " 涨到 " +
+    // 现在可以要求**严格相等**：十个 fd 全都该关掉了，多一个就是泄漏。
+    //
+    // ⚠️ 不关的话这里正好多出 10 个 —— 而且那些记录被清理之后，fd 连同记录
+    //    一起消失，再也没人能关。跑久了撞上 RLIMIT_NOFILE，报错却发生在一个
+    //    毫不相干的 open() 上。
+    CHECK_MSG(after == before,
+              ("跑完 10 个任务后 fd 数从 " + std::to_string(before) + " 变成 " +
                std::to_string(after) + " —— 管道读端没关")
                   .c_str());
 }
