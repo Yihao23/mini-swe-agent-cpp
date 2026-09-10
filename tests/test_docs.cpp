@@ -420,26 +420,26 @@ TEST(doc_include_mini_agent_tools_builtin_hpp_L224) {
     CHECK_MSG((t.run(grep, Json{{"pattern","[unclosed"}}).is_error) == (true), "include/mini_agent/tools/builtin.hpp:234 的示例失效了");
 }
 
-/// From include/mini_agent/tools/builtin.hpp:306
-TEST(doc_include_mini_agent_tools_builtin_hpp_L306) {
+/// From include/mini_agent/tools/builtin.hpp:319
+TEST(doc_include_mini_agent_tools_builtin_hpp_L319) {
     DocTools t;
     Memory mem(t.cfg.memory_dir());
     t.ctx.memory = &mem;
     const auto memory = make_memory_tool();
     // ⚠️ 审查对象是被操作的那条记忆，不是 action。字母序 action < name，
     //    默认实现会把 "write" 交给沙箱去匹配规则。
-    CHECK_MSG((memory->subject(Json{{"action","write"},{"name","user-prefs"}})) == ("user-prefs"), "include/mini_agent/tools/builtin.hpp:314 的示例失效了");
+    CHECK_MSG((memory->subject(Json{{"action","write"},{"name","user-prefs"}})) == ("user-prefs"), "include/mini_agent/tools/builtin.hpp:327 的示例失效了");
     const Json write_args{{"action","write"},{"name","style"},
                           {"description","提交信息的格式要求"},
                           {"body","Conventional Commits"},{"type","feedback"}};
-    CHECK_MSG((t.run(memory, write_args).is_error) == (false), "include/mini_agent/tools/builtin.hpp:319 的示例失效了");
+    CHECK_MSG((t.run(memory, write_args).is_error) == (false), "include/mini_agent/tools/builtin.hpp:332 的示例失效了");
     const auto loaded = t.run(memory, Json{{"action","load"},{"name","style"}});
-    CHECK_MSG(((loaded.content.find("Conventional Commits") != std::string::npos)) == (true), "include/mini_agent/tools/builtin.hpp:321 的示例失效了");
+    CHECK_MSG(((loaded.content.find("Conventional Commits") != std::string::npos)) == (true), "include/mini_agent/tools/builtin.hpp:334 的示例失效了");
     // description 是必填的
-    CHECK_MSG((t.run(memory, Json{{"action","write"},{"name","x"},{"body","b"}}).is_error) == (true), "include/mini_agent/tools/builtin.hpp:324 的示例失效了");
+    CHECK_MSG((t.run(memory, Json{{"action","write"},{"name","x"},{"body","b"}}).is_error) == (true), "include/mini_agent/tools/builtin.hpp:337 的示例失效了");
     // 未知 action 的报错要点出可用的那几个，而不是抱怨缺 name
     const auto bad = t.run(memory, Json{{"action","frobnicate"}});
-    CHECK_MSG(((bad.content.find("search") != std::string::npos)) == (true), "include/mini_agent/tools/builtin.hpp:327 的示例失效了");
+    CHECK_MSG(((bad.content.find("search") != std::string::npos)) == (true), "include/mini_agent/tools/builtin.hpp:340 的示例失效了");
 }
 
 int main() { return mt::run_all(); }

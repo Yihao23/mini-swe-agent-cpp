@@ -269,6 +269,19 @@ ToolPtr make_bash_tool();
 ///       short enough that resending it costs nothing.
 /// @note The current list is fed back each turn through turn_context(), not
 ///       kept in the system prompt — it changes, and the system prompt may not.
+/// @note At most one entry may be in_progress; a submission with more is
+///       refused. Allowing several leaves "what is being worked on right now"
+///       without an answer, and that is the only question the list exists to
+///       answer.
+/// @note Validation is all-or-nothing. A submission that half-applies before
+///       failing leaves the model holding a list that does not match the one
+///       it will be shown next turn.
+/// @note Keys other than content and status are dropped. The model likes to
+///       add id, priority and notes; turn_context reads none of them, so
+///       keeping them re-feeds dead weight every single turn.
+/// @note Not read_only — it mutates ctx.todos, which a sub-agent spawn copies
+///       wholesale. run_batch is serial today; the flag is what keeps this
+///       correct if it stops being.
 ToolPtr make_todo_tool();
 
 // --- Stage 5：渐进式披露的两个入口 ---

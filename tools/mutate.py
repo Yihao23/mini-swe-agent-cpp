@@ -825,6 +825,41 @@ MUTANTS = [
         note="模型可以自己解除超时限制",
     ),
 
+    # ── Stage 4：计划清单 ───────────────────────────────────────────────────
+    dict(
+        name="不限制只能有一条 in_progress",
+        file="src/tools/builtin.cpp",
+        edits=[('        if (in_progress > 1)\n            return ToolResult::error(std::format(\n                "有 {} 条 in_progress，只能有一条。做完一条改成 completed 再开下一条。",\n                in_progress));\n\n', '')],
+        binaries=["test_todo"],
+        expect=["only_one_entry_may_be_in_progress"],
+        note="三条同时在做，「现在在做什么」就没有答案了 —— "
+             "而那是模型看这张表的唯一理由",
+    ),
+    dict(
+        name="提交时往里追加而不是整表替换",
+        file="src/tools/builtin.cpp",
+        edits=[('        ctx.todos = std::move(fresh);', '        for (auto& t : fresh) ctx.todos.push_back(std::move(t));')],
+        binaries=["test_todo"],
+        expect=["a_submission_replaces_the_whole_list"],
+        note="做完的事永远留在表上，越滚越长，模型分不清哪些还没做",
+    ),
+    dict(
+        name="原样收下模型给的条目，不丢多余的键",
+        file="src/tools/builtin.cpp",
+        edits=[('            fresh.push_back(Json{{"content", *content}, {"status", *status}});', '            fresh.push_back(item);')],
+        binaries=["test_todo"],
+        expect=["extra_keys_are_dropped_so_they_are_not_re_fed_every_turn"],
+        note="id / priority / notes 每轮都被回灌一遍，而 turn_context 根本不读",
+    ),
+    dict(
+        name="边校验边写，不等全部通过",
+        file="src/tools/builtin.cpp",
+        edits=[('            in_progress += (*status == "in_progress");\n            completed += (*status == "completed");', '            in_progress += (*status == "in_progress");\n            completed += (*status == "completed");\n            ctx.todos = fresh;   // 边校验边写')],
+        binaries=["test_todo"],
+        expect=["a_rejected_submission_leaves_the_old_plan_alone"],
+        note="提交被拒，但表已经改了一半 —— 模型看到的和它以为的对不上",
+    ),
+
     # ── Stage 6：后台任务的三条工具路径 ─────────────────────────────────────
     dict(
         name="run_in_background 用 args.value 取（类型不对就抛）",

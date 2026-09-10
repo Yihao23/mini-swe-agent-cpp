@@ -1052,6 +1052,103 @@ class BashTool final : public Tool {
 
 }  // namespace
 
+/// @brief The agent's own plan, rewritten wholesale on every call.
+///
+/// @note Replace-the-whole-list, not add/remove/patch. A model that has to
+///       work out *which* entry to mutate gets it wrong, and the list is short
+///       enough that resending it costs nothing.
+/// @note At most one entry may be in_progress. Without that rule the list
+///       stops answering the only question it exists to answer — what is being
+///       worked on right now.
+/// @note Not read_only: it mutates ctx.todos, and ToolContext is copied
+///       wholesale when a sub-agent is spawned. run_batch is serial today, so
+///       nothing races yet; the flag is what keeps that true if it stops being.
+class TodoTool final : public Tool {
+  public:
+    std::string_view name() const override { return "todo"; }
+
+    std::string_view description() const override {
+        return "登记或更新你这一轮的计划。每次提交**整张清单**，不是增删单条。"
+               "任务有三步以上、或者用户一次给了好几件事时用它。"
+               "同一时刻只能有一条 in_progress —— 做完一条立刻改成 completed 再开下一条。"
+               "琐碎的单步任务不要用，那只是噪音。";
+    }
+
+    Json input_schema() const override {
+        return Json{
+            {"type", "object"},
+            {"properties",
+             {{"todos",
+               {{"type", "array"},
+                {"description", "完整的清单，会整个替换掉旧的"},
+                {"items",
+                 {{"type", "object"},
+                  {"properties",
+                   {{"content", {{"type", "string"}, {"description", "要做的事，祈使句"}}},
+                    {"status",
+                     {{"type", "string"},
+                      {"enum", Json::array({"pending", "in_progress", "completed"})}}}}},
+                  {"required", Json::array({"content", "status"})}}}}}}},
+            {"required", Json::array({"todos"})},
+        };
+    }
+
+    bool read_only() const override { return false; }        // 见类注释：改 ctx.todos
+    bool requires_permission() const override { return false; }  // agent 自己的草稿纸
+
+    ToolResult run(const Json& args, ToolContext& ctx) override {
+        if (!args.is_object() || !args.contains("todos") || !args["todos"].is_array())
+            return ToolResult::error("缺少 todos 参数（必须是数组）");
+
+        Json fresh = Json::array();
+        int in_progress = 0, completed = 0;
+
+        for (const auto& item : args["todos"]) {
+            const int i = static_cast<int>(fresh.size()) + 1;
+            if (!item.is_object())
+                return ToolResult::error(std::format("第 {} 条不是对象", i));
+
+            const auto content = str_arg(item, "content");
+            if (!content || content->empty())
+                return ToolResult::error(std::format("第 {} 条缺少 content（非空字符串）", i));
+
+            const auto status = str_arg(item, "status");
+            if (!status)
+                return ToolResult::error(std::format("第 {} 条缺少 status", i));
+            if (*status != "pending" && *status != "in_progress" && *status != "completed")
+                return ToolResult::error(std::format(
+                    "第 {} 条的 status 是 \"{}\"，只能是 pending / in_progress / completed",
+                    i, *status));
+
+            in_progress += (*status == "in_progress");
+            completed += (*status == "completed");
+            // ⚠️ 只留这两个键。模型爱多塞字段（id、priority、notes），留着的话
+            //    每轮回灌都把它们再喂一遍 —— turn_context 根本不读，纯浪费上下文。
+            fresh.push_back(Json{{"content", *content}, {"status", *status}});
+        }
+
+        // ⚠️ 这条不变量才是清单的意义所在。允许三条同时 in_progress 的话，
+        //    「现在在做什么」就没有答案了，而那是模型看这张表的唯一理由。
+        if (in_progress > 1)
+            return ToolResult::error(std::format(
+                "有 {} 条 in_progress，只能有一条。做完一条改成 completed 再开下一条。",
+                in_progress));
+
+        ctx.todos = std::move(fresh);
+
+        if (ctx.todos.empty()) return ToolResult{.content = "计划已清空。"};
+
+        // 把提交后的样子回显给模型。⚠️ 这不是客套 —— 上面丢掉了多余的键、
+        // 而且下一轮 turn_context 才会再喂一次，中间这一步不回显它就是瞎的。
+        std::string body = std::format("计划已更新（{} 条，{} 条已完成）：\n",
+                                       ctx.todos.size(), completed);
+        for (const auto& t : ctx.todos)
+            body += std::format("  [{}] {}\n", t["status"].get<std::string>(),
+                                t["content"].get<std::string>());
+        return ToolResult{.content = std::move(body)};
+    }
+};
+
 /// @brief Reads what a background task has produced since the last read.
 ///
 /// @note Only the new part. Handing back the whole buffer every turn would
@@ -1158,7 +1255,7 @@ ToolPtr make_edit_tool() { return std::make_shared<EditTool>(); }
 ToolPtr make_glob_tool() { return std::make_shared<GlobTool>(); }
 ToolPtr make_grep_tool() { return std::make_shared<GrepTool>(); }
 ToolPtr make_bash_tool() { return std::make_shared<BashTool>(); }
-ToolPtr make_todo_tool() { todo("Stage 4: todo —— 覆盖式提交，每轮由 reminder 回灌"); }
+ToolPtr make_todo_tool() { return std::make_shared<TodoTool>(); }
 ToolPtr make_skill_tool() { return std::make_shared<SkillTool>(); }
 ToolPtr make_memory_tool() { return std::make_shared<MemoryTool>(); }
 ToolPtr make_task_tool() { return std::make_shared<TaskTool>(); }
@@ -1175,6 +1272,7 @@ std::vector<ToolPtr> builtin_tools(const Config& cfg) {
     v.push_back(make_glob_tool());
     v.push_back(make_grep_tool());
     v.push_back(make_bash_tool());
+    v.push_back(make_todo_tool());
 
     if (cfg.enable_memory) v.push_back(make_memory_tool());
     if (cfg.enable_skills) v.push_back(make_skill_tool());
@@ -1190,9 +1288,6 @@ std::vector<ToolPtr> builtin_tools(const Config& cfg) {
     v.push_back(make_bash_output_tool());
     v.push_back(make_kill_task_tool());
 
-    // TODO(Stage 4): todo 工厂还是 todo()，一调就抛。开关默认为 true，所以要等
-    //   写完再打开，否则默认配置下 agent 直接起不来。
-    // v.push_back(make_todo_tool());
     return v;
 }
 
