@@ -11,12 +11,12 @@
 // ToolContext 里全是指向其他成员的指针，Agent 又持有 ToolContext 的引用。
 // 成员**按声明顺序**构造、按逆序析构，所以：
 //   * 被指向的东西（sandbox / session / memory / …）必须声明在**前面**
-//   * agent_ 必须是最后一个声明的成员
+//   * agent 必须是最后一个声明的成员
 // 顺序写错了，构造 Agent 时拿到的是还没初始化的对象 —— 这类 bug 只在 release
 // 构建下偶尔炸，非常难查。写完回来数一遍顺序。
 //
-// 另一个坑：App 里存了大量互指的成员，所以 **App 必须不可拷贝、不可移动**
-// （移动会让 ToolContext 里的指针指向旧对象）。显式 delete 掉。
+// 顺序还管着析构：agent 最先析构，background 在它之后 —— 循环彻底不再碰后台
+// 任务了，才轮到去杀那些子进程。反过来就是「进程全死了，agent 才开始收尾」。
 //
 // ── 声明顺序（= 构造顺序，析构逆序）─────────────────────────────────────────
 //
@@ -29,6 +29,7 @@
 //     sandbox       │  构造时读 cfg.permission_mode
 //     memory        │  optional —— 关掉就不建，连目录都不建
 //     skills        │
+//     background    │  ⚠️ 也在 ctx 之前，但真正要紧的是它在 agent **之后**析构
 //     registry      │
 //     session       │
 //     ctx          ─┘  ⚠️ 里面全是指向上面那些的**裸指针**
@@ -36,6 +37,11 @@
 //
 //   ⚠️ 顺序错了没有任何诊断。把 agent 挪到 ctx 前面，它拿到的就是一个还没
 //      接好线的 ToolContext —— 编译过、跑起来，然后工具拿到一堆 nullptr。
+//
+//   析构是逆序，所以这份清单也是一份"谁先死"的清单，倒着读：
+//      agent 先死 → … → background 后死。循环彻底不再碰后台任务了，才轮到
+//      去杀那些子进程。把 background 挪到 agent 后面就反过来了 —— 进程全被
+//      杀掉，agent 才开始收尾，中间那一段它对着一堆已经死掉的 pid 工作。
 //
 // ── 接线：谁指向谁 ──────────────────────────────────────────────────────────
 //
@@ -49,14 +55,38 @@
 //                         ctx.memory / ctx.skills     ← 可能是 nullptr
 //                         ctx.spawn                   ← lambda，捕获 this
 //
-//   ctx 里全是**非拥有裸指针**，App 是它们唯一的所有者。这就是那两句 delete
-//   的全部理由：
+//   ctx 里全是**非拥有裸指针**，App 是它们唯一的所有者。
 //
-//        App(const App&) = delete;   拷贝 → 两份 App 的 ctx 都指向第一份的成员
-//        App(App&&)      = delete;   移动 → 所有指针指向搬空的旧地址
+// ── 那两句 delete 到底买到了什么 ────────────────────────────────────────────
 //
-//   ⚠️ 这两种错误**编译器本来不会说话** —— 写上 delete 就是让它说话。
-//      ctx.spawn 那个 lambda 捕获 this，安全性也全靠这一条。
+//   先说清楚**不是**什么：那些裸指针的有效性不靠它们，靠的是 pimpl。
+//
+//        App（栈上）                    Impl（堆上，地址永不变）
+//        ┌────────────┐                ┌──────────────────────┐
+//        │ unique_ptr │───────────────▶│ cfg / sandbox / …    │
+//        │   impl_    │                │ ctx.spawn = [Impl*]──┼──┐
+//        └────────────┘                │                      │◀─┘
+//                                      └──────────────────────┘
+//
+//   移动 App 搬走的只是那个 unique_ptr —— Impl 一个字节都没动。ctx 的指针、
+//   lambda 捕获的 this（写在 Impl 的构造函数里，所以是 Impl*）全都照样有效。
+//
+//   真正的理由是这两条：
+//
+//        App(const App&) = delete;
+//            其实 unique_ptr 本来就不可拷贝，编译器自己会拦。写出来是给读的人
+//            看的 —— 别费劲去"修"它，两份 App 各自管一堆子进程和会话文件，
+//            那不是拷贝能表达的东西。
+//
+//        App(App&&) = delete;
+//            ⚠️ 这一条**编译器本来不会说话**。unique_ptr 可移动，所以移动构造
+//            默认就有。移动之后源 App 的 impl_ 是 nullptr，而每个访问器都是
+//            `return *impl_->agent;` —— 直接解引用空指针，没有任何诊断。
+//            删掉它，用被移走的壳就变成编译错误。
+//
+//   ⚠️ 还有第二个作用：哪天有人把 pimpl 去掉、把成员摊回 App 里，上面那条
+//      "指针天然有效"就不成立了 —— 那时移动会让 ctx 指向搬空的旧对象。
+//      规则先立在这儿，省得那一天再想起来。
 //
 // ── 构造做的七件事 ──────────────────────────────────────────────────────────
 //
@@ -64,6 +94,7 @@
 //   ② llm 为空 → AnthropicClient       测试传 FakeLlm 进来就跳过
 //   ③ session.bind(sessions_dir())     定落盘位置，此刻还没写文件
 //   ④ memory / skills                  开关打开才建
+//        background                    没有开关 —— 总是建
 //   ⑤ builtin_tools(cfg) → registry    工具表也按开关拼
 //   ⑥ ctx 的十个字段接线
 //   ⑦ ctx.spawn = lambda               Stage 6；捕获 this
@@ -108,10 +139,12 @@ class McpClient;
 /// the Session, Agent borrows all of them. Get the order wrong and a member
 /// binds to something not built yet.
 ///
-/// @warning Non-movable, and deliberately. The members point at each other, so
-///          moving the App would leave those pointers aimed at the old
-///          addresses. Deleting the move is what makes that a compile error
-///          rather than a use-after-move nobody notices.
+/// @warning Non-movable, and deliberately — though not for the reason it looks
+///          like. Impl lives on the heap and never moves, so the raw pointers
+///          inside ToolContext would survive a move of the App just fine. What
+///          would not survive is the moved-from App: its impl_ is null and
+///          every accessor dereferences it. Deleting the move turns that into
+///          a compile error instead of a null dereference with no diagnostic.
 ///
 /// @note pimpl, so member declaration order — which is construction order —
 ///       stays in the .cpp where it can be reasoned about, instead of in a
