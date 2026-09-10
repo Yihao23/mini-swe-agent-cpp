@@ -834,6 +834,81 @@ MUTANTS = [
         note="模型可以自己解除超时限制",
     ),
 
+    # ── Stage 7：MCP 客户端 ─────────────────────────────────────────────────
+    dict(
+        name="握手后不发 notifications/initialized",
+        file="src/mcp.cpp",
+        edits=[('    if (!impl_->notify("notifications/initialized", Json::object()))\n        return std::unexpected("发 notifications/initialized 失败：管道已断");\n\n', '')],
+        binaries=["test_mcp"],
+        expect=["the_server_is_told_the_handshake_is_finished"],
+        note="等这条通知才开始服务的 server 会一直不答。⚠️ 真实症状是**卡住**，"
+             "不是报错 —— mock_mcp_strict.py 改成回错误只是为了让用例跑得快",
+    ),
+    dict(
+        name="收到第一条消息就返回，不按 id 匹配",
+        file="src/mcp.cpp",
+        edits=[('            // 没有 id = 通知。跳过。\n            if (!in.is_object() || !in.contains("id") || in["id"].is_null()) continue;\n            // id 对不上 = 别人的响应（不该发生，但对面爱怎么写是它的事）。跳过。\n            if (!in["id"].is_number_integer() || in["id"].get<long>() != id) continue;\n', '            if (!in.is_object()) continue;\n')],
+        binaries=["test_mcp"],
+        expect=["the_handshake_steps_over_the_notification_in_the_middle"],
+        note="server 穿插发的通知会被当成答案。一条日志就这样变成了 result，"
+             "而它长得完全像一条正常消息",
+    ),
+    dict(
+        name="解析不了的一行直接放弃",
+        file="src/mcp.cpp",
+        edits=[('                (void)e;\n                continue;', '                return std::unexpected(std::format("{}：读不懂的一行: {}", method, e.what()));')],
+        binaries=["test_mcp"],
+        expect=["junk_on_stdout_is_skipped_not_taken_as_an_answer"],
+        note="一条无害的启动横幅就废掉整个 server",
+    ),
+    dict(
+        name="JSON-RPC 的 error 当成 result 收下",
+        file="src/mcp.cpp",
+        edits=[('            if (in.contains("error")) {', '            if (false) {')],
+        binaries=["test_mcp"],
+        expect=["an_error_response_is_reported_not_treated_as_a_result"],
+        note="error 是一条**成功送达、格式正常**的响应，最容易被当成结果。"
+             "收下来模型就拿着一个空对象继续推理",
+    ),
+    dict(
+        name="远程工具名不加 mcp__<server>__ 前缀",
+        file="src/mcp.cpp",
+        edits=[('                std::format("mcp__{}__{}", server_name, remote), remote,', '                remote, remote,')],
+        binaries=["test_mcp"],
+        expect=["servers_from_the_config_contribute_prefixed_tools"],
+        note="两个 server 都提供 read_file 就撞名；而且规则再也写不出 "
+             "deny Mcp__github__*",
+    ),
+    dict(
+        name="远程工具声称自己只读",
+        file="src/mcp.cpp",
+        edits=[('    bool read_only() const override { return false; }\n    bool requires_permission() const override { return true; }', '    bool read_only() const override { return true; }\n    bool requires_permission() const override { return true; }')],
+        binaries=["test_mcp"],
+        expect=["a_remote_tool_behaves_like_any_other_tool"],
+        note="第三方 server 干什么我们不知道。声称只读 = executor 敢和别的工具"
+             "并发跑它，而它可能正在改文件",
+    ),
+    dict(
+        name="一个 server 起不来就整个放弃",
+        file="src/mcp.cpp",
+        edits=[('            out.errors.push_back(std::format("MCP server {} 握手失败：{}",\n                                             server_name, caps.error()));\n            continue;', '            out.errors.push_back(std::format("MCP server {} 握手失败：{}",\n                                             server_name, caps.error()));\n            return out;')],
+        binaries=["test_mcp"],
+        expect=["one_broken_server_does_not_take_down_the_others"],
+        note="mcp.json 里一行写错，其余 server 的工具全都没了",
+    ),
+    dict(
+        name="子进程的 stderr 也接进管道",
+        file="src/spawn.cpp",
+        edits=[('        ::close(to_child[0]);\n        ::close(from_child[1]);', '        ::dup2(from_child[1], STDERR_FILENO);\n        ::close(to_child[0]);\n        ::close(from_child[1]);')],
+        binaries=["test_mcp"],
+        expect=["the_handshake_steps_over_the_notification_in_the_middle"],
+        note="server 的日志掺进 JSON-RPC 流。这是 spawn_piped 存在的主要理由",
+        known_gap="客户端「解析不了的行就跳过」那条逻辑正好把它救回来 —— 两个机制的"
+                  "保护范围重叠了。真会出事的是**日志本身是合法 JSON**（结构化日志"
+                  "就是这样），那时它会被当成一条消息；但造这个场景需要一个刻意为之"
+                  "的假 server，那样的用例只在证明自己",
+    ),
+
     # ── Stage 4：计划清单 ───────────────────────────────────────────────────
     dict(
         name="不限制只能有一条 in_progress",

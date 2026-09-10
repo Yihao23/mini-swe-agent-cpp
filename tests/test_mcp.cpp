@@ -34,6 +34,9 @@ int g_seq = 0;
 
 const fs::path kMockServer = fs::path(MINI_AGENT_TEST_DIR) / "mock_mcp_server.py";
 
+/// 一个"较真"的 server：没收到 notifications/initialized 之前什么都不给。
+const fs::path kStrictServer = fs::path(MINI_AGENT_TEST_DIR) / "mock_mcp_strict.py";
+
 struct Fixture {
     fs::path root;
 
@@ -82,6 +85,24 @@ TEST(the_handshake_steps_over_the_notification_in_the_middle) {
     CHECK_MSG(caps.has_value(), caps ? "" : caps.error().c_str());
     CHECK(caps->value("protocolVersion", std::string{}) == "2024-11-05");
     CHECK(caps->contains("capabilities"));
+}
+
+TEST(the_server_is_told_the_handshake_is_finished) {
+    // ⚠️ 收到 initialize 的响应还没完 —— 协议要求再发一条
+    //    notifications/initialized。普通的 mock server 不等它，所以那一句
+    //    删掉了也没人发现。这个 server 会等。
+    //
+    // ⚠️ 一处刻意的不忠实：真实 server 多半是**不答**，症状是卡到 15 秒超时。
+    //    这个改成回一条 JSON-RPC error，好让用例毫秒级完成。代价是测的是
+    //    "客户端确实发了那条通知"，而不是"不发会卡死"。
+    McpClient c("strict", "python3", {kStrictServer.string()}, fs::temp_directory_path());
+    CHECK(c.initialize().has_value());
+
+    const auto tools = c.list_tools();
+    CHECK_MSG(tools.has_value(),
+              tools ? "" : ("握手后仍拿不到工具，多半是没发 initialized：" +
+                            tools.error()).c_str());
+    CHECK(tools->size() == 1);
 }
 
 TEST(tools_can_be_listed_after_the_handshake) {
