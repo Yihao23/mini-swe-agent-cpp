@@ -14,6 +14,7 @@
 #include <string>
 
 #include "mini_agent/config.hpp"
+#include "mini_agent/mcp.hpp"
 #include "mini_agent/message.hpp"
 #include "mini_agent/parser.hpp"
 #include "mini_agent/memory.hpp"
@@ -107,5 +108,36 @@ struct DocTools {
         std::ofstream(p, std::ios::binary) << body;
     }
 };
+
+/// @brief Path to the 30-line fake MCP server under tests/.
+///
+/// @note It sends a notification in the middle of the handshake on purpose,
+///       so every example that goes through initialize() also shows the
+///       client stepping over a message that is not its answer.
+inline std::string doc_mock_mcp_server() {
+    return (std::filesystem::path(MINI_AGENT_TEST_DIR) / "mock_mcp_server.py").string();
+}
+
+/// @brief Write an mcp.json into a fresh directory and return its path.
+///
+/// @param name        The mock server's name — it becomes the tool prefix.
+/// @param with_broken Also list a server whose command does not exist, to show
+///                    that one bad entry costs only its own tools.
+///
+/// @note A fresh directory per call, for the same reason DocTools has one:
+///       examples must not see each other's files.
+inline std::filesystem::path doc_mcp_config(const std::string& name, bool with_broken = false) {
+    static int seq = 0;
+    const auto dir = std::filesystem::temp_directory_path() /
+                     ("mini-agent-doc-mcp-" + std::to_string(++seq));
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    Json servers = Json::object();
+    servers[name] = Json{{"command", "python3"}, {"args", Json::array({doc_mock_mcp_server()})}};
+    if (with_broken) servers["broken"] = Json{{"command", "no-such-program-xyz"}};
+    const auto path = dir / "mcp.json";
+    std::ofstream(path, std::ios::binary) << Json{{"mcpServers", servers}}.dump(2);
+    return path;
+}
 
 }  // namespace mini

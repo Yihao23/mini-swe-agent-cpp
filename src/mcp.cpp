@@ -49,6 +49,15 @@ constexpr Ms kShutdownGrace{500};
 ///    `yes`），没有上界就是把内存吃光。一行 8MB 已经比任何真实响应都大。
 constexpr std::size_t kMaxLine = 8u * 1024 * 1024;
 
+/// @brief Milliseconds left before `deadline`, clamped at 0.
+///
+/// @param deadline Absolute time point.
+/// @return What poll() takes as its timeout; 0 once the deadline has passed.
+///
+/// @code
+///   remaining_ms(now + 1500ms)   →  1500（左右）
+///   remaining_ms(now - 10ms)     →  0        ← 过期不返回负数：poll(-1) 是"永远等"
+/// @endcode
 int remaining_ms(Clock::time_point deadline) {
     const auto left = std::chrono::duration_cast<Ms>(deadline - Clock::now()).count();
     return left > 0 ? static_cast<int>(left) : 0;
@@ -72,7 +81,21 @@ struct McpClient::Impl {
     ///    两条消息会拌在一起，而且响应也分不清是谁的。整个「发+等」是一个原子操作。
     std::mutex mu;
 
-    /// 写一行。返回 false = 管道断了（server 死了）。
+    /// @brief Serialise one message and write it as a single line.
+    ///
+    /// @param msg A JSON-RPC request or notification.
+    /// @return false when the pipe is broken — the server has exited.
+    ///
+    /// @code
+    ///   send_line({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})
+    ///
+    ///   写进 server stdin 的字节：
+    ///   {"id":2,"jsonrpc":"2.0","method":"tools/list","params":{}}\n
+    /// @endcode
+    ///
+    /// @note Loops on partial writes. A pipe accepts at most 64KB at a time,
+    ///       and a tools/call carrying a large file would otherwise be cut in
+    ///       half mid-frame.
     bool send_line(const Json& msg) {
         const std::string line = msg.dump() + "\n";
         std::size_t sent = 0;
@@ -87,9 +110,22 @@ struct McpClient::Impl {
         return true;
     }
 
-    /// 读出一行（不含换行符）。
+    /// @brief Take one line off the server's stdout, waiting at most until `deadline`.
     ///
-    /// @return 行内容；nullopt = 超时、EOF 或出错，原因写进 err。
+    /// @param deadline Absolute; shared across every line of one request.
+    /// @param err      Filled in when nullopt is returned.
+    /// @return The line without its newline; nullopt on timeout, EOF or error.
+    ///
+    /// @code
+    ///   管道里到了：  {"method":"notifications/message",...}\n{"id":1,"res
+    ///
+    ///   第 1 次调用 → {"method":"notifications/message",...}
+    ///                inbuf 剩下 {"id":1,"res            ← 半行留着，不丢
+    ///   第 2 次调用 → poll 等更多字节 → 拼成整行再返回
+    ///
+    ///   server 退出、inbuf 为空 → nullopt，err = "server 已退出（stdout 到达 EOF）"
+    ///   15 秒没等到换行符       → nullopt，err = "等 server 响应超时"
+    /// @endcode
     std::optional<std::string> read_line(Clock::time_point deadline, std::string& err) {
         for (;;) {
             // 先看 inbuf 里有没有现成的一行 —— 上一次 read 很可能一次读回来好几行。
@@ -141,7 +177,25 @@ struct McpClient::Impl {
         }
     }
 
-    /// 发一条请求，等到 id 对上的那条响应。
+    /// @brief Send one request and return the `result` of the response with its id.
+    ///
+    /// @param method The JSON-RPC method, e.g. "tools/list".
+    /// @param params Its params object.
+    /// @return The `result` member; an error for a JSON-RPC `error`, a broken
+    ///         pipe, or a timeout.
+    ///
+    /// @code
+    ///   request("initialize", {...})
+    ///
+    ///   → {"id":1,"jsonrpc":"2.0","method":"initialize","params":{...}}
+    ///   ← starting up...                                     读不懂 → 跳过
+    ///   ← {"jsonrpc":"2.0","method":"notifications/message"}  没有 id → 跳过
+    ///   ← {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05"}}
+    ///                                                        id 对上 → 返回 result
+    ///
+    ///   ← {"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"method not found"}}
+    ///       → unexpected("initialize 返回错误 -32601: method not found")
+    /// @endcode
     ///
     /// ⚠️ 这个循环是这一层的核心。server 随时可能穿插发**通知** —— 没有 id 的
     ///    消息，比如日志、进度。不跳过它们的话，一条日志会被当成答案交给模型。
@@ -188,7 +242,17 @@ struct McpClient::Impl {
         }
     }
 
-    /// 发一条通知（没有 id，不等回复）。
+    /// @brief Send a notification: no id, and nothing comes back.
+    ///
+    /// @param method E.g. "notifications/initialized".
+    /// @param params Its params object.
+    /// @return false when the pipe is broken.
+    ///
+    /// @code
+    ///   notify("notifications/initialized", {})
+    ///   → {"jsonrpc":"2.0","method":"notifications/initialized","params":{}}
+    ///   ← （什么都不会回来 —— 所以这里不能去读，读就是卡到超时）
+    /// @endcode
     bool notify(std::string_view method, Json params) {
         if (!spawn_error.empty() || closed) return false;
         std::lock_guard lock(mu);
@@ -200,6 +264,21 @@ struct McpClient::Impl {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// @brief Spawn the server; record, rather than throw, a failure to start.
+///
+/// Contract in mcp.hpp. What happens underneath:
+///
+/// @code
+///   McpClient("github", "npx", {"-y", "@mcp/github"}, "/repo")
+///     → spawn_piped: fork + execvp("npx", ["npx","-y","@mcp/github"])
+///         子进程 stdin  ← 我们的 write_fd
+///         子进程 stdout → 我们的 read_fd
+///         子进程 stderr   原样继承（不进管道）
+///
+///   McpClient("nope", "no-such-program-xyz", {}, "/repo")
+///     → fork 成功、execvp 失败、子进程 _exit(127)
+///     → 构造照样返回；第一次请求读到 EOF，报"server 已退出"
+/// @endcode
 McpClient::McpClient(std::string name, std::string command, std::vector<std::string> args,
                      const fs::path& cwd)
     : impl_(std::make_unique<Impl>()) {
@@ -217,10 +296,21 @@ McpClient::McpClient(std::string name, std::string command, std::vector<std::str
     impl_->read_fd = p.read_fd;
 }
 
+/// @brief Shuts the server down through close().
 McpClient::~McpClient() {
     if (impl_) close();
 }
 
+/// @brief The handshake: one request, then one notification.
+///
+/// @code
+///   → {"id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05",
+///                                             "capabilities":{},"clientInfo":{...}}}
+///   ← {"id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}}}}
+///   → {"method":"notifications/initialized","params":{}}     ⚠️ 少了这条 server 不干活
+///
+///   返回：{"protocolVersion":"2024-11-05","capabilities":{"tools":{}}}
+/// @endcode
 std::expected<Json, std::string> McpClient::initialize() {
     auto caps = impl_->request(
         "initialize",
@@ -238,6 +328,16 @@ std::expected<Json, std::string> McpClient::initialize() {
     return caps;
 }
 
+/// @brief Fetch the tool list and check that it is an array.
+///
+/// @code
+///   → {"id":2,"method":"tools/list","params":{}}
+///   ← {"id":2,"result":{"tools":[{"name":"echo","inputSchema":{...}}]}}
+///   返回：[{"name":"echo","inputSchema":{...}}]
+///
+///   ← {"id":2,"result":{}}
+///   返回：unexpected("tools/list 的响应里没有 tools 数组")
+/// @endcode
 std::expected<Json, std::string> McpClient::list_tools() {
     auto r = impl_->request("tools/list", Json::object());
     if (!r) return r;
@@ -246,6 +346,20 @@ std::expected<Json, std::string> McpClient::list_tools() {
     return (*r)["tools"];
 }
 
+/// @brief Call one remote tool and flatten its content blocks to text.
+///
+/// @code
+///   call_tool("echo", {"text":"hi"})
+///   → {"id":3,"method":"tools/call","params":{"name":"echo","arguments":{"text":"hi"}}}
+///   ← {"id":3,"result":{"content":[{"type":"text","text":"echo: hi"}],"isError":false}}
+///   返回：{"echo: hi", false}
+///
+///   ← {"id":3,"result":{"content":[{"type":"image",...}],"isError":false}}
+///   返回：{"(server 没有返回文本内容)", false}     ← 空串会被 API 拒掉
+///
+///   call_tool("echo", "not an object")
+///   → arguments 被换成 {}                         ← 协议要求它是对象
+/// @endcode
 std::expected<std::pair<std::string, bool>, std::string> McpClient::call_tool(
     std::string_view name, const Json& args) {
     auto r = impl_->request("tools/call",
@@ -269,8 +383,20 @@ std::expected<std::pair<std::string, bool>, std::string> McpClient::call_tool(
     return std::pair{std::move(text), r->value("isError", false)};
 }
 
+/// @brief The name given at construction; `"github"` for `mcp__github__*` tools.
 const std::string& McpClient::name() const { return impl_->name; }
 
+/// @brief Ask the server to leave, then make it.
+///
+/// @code
+///   close()
+///     ① close(write_fd)            server 在 stdin 上读到 EOF，正常情况下自己退出
+///     ② waitpid(WNOHANG) 轮询 500ms
+///     ③ 还没走 → kill(-pgid, SIGTERM)，100ms 后 SIGKILL
+///     ④ close(read_fd)，pid = -1
+///
+///   close()   再调一次 → 直接返回（closed 已经是 true）
+/// @endcode
 void McpClient::close() {
     if (impl_->closed) return;      // 幂等 —— 析构函数也会调
     impl_->closed = true;
@@ -314,6 +440,13 @@ namespace {
 
 /// 一个远程工具，长得和本地工具一模一样。
 ///
+/// @code
+///   McpTool(client, "mcp__github__search", "search", "Search issues", schema)
+///     name()                →  "mcp__github__search"   模型和规则看到的
+///     run({"q":"bug"}, ctx) →  client->call_tool("search", {"q":"bug"})
+///                                                      server 看到的是没前缀的名字
+/// @endcode
+///
 /// ⚠️ executor 和 sandbox 完全看不出它是远程的 —— 这就是 Stage 2 把 Tool
 ///    抽象成纯虚接口的回报：加一整类新能力，两个调用方一行都不用改。
 class McpTool final : public Tool {
@@ -335,6 +468,16 @@ class McpTool final : public Tool {
     bool read_only() const override { return false; }
     bool requires_permission() const override { return true; }
 
+    /// @brief Forward the call; keep transport failure and tool failure apart.
+    ///
+    /// @param args Forwarded to the server untouched.
+    /// @return The server's text with its isError, or an error for a broken pipe
+    ///         or timeout.
+    ///
+    /// @code
+    ///   server 回 {"content":[...], "isError":true}  →  ToolResult{正文, is_error=true}
+    ///   管道断了 / 超时                              →  ToolResult::error("MCP 调用失败：…")
+    /// @endcode
     ToolResult run(const Json& args, ToolContext&) override {
         const auto r = client_->call_tool(remote_, args);
         // 两种失败要分开：传输层挂了（管道断、超时）和 server 说这次调用失败。
@@ -351,6 +494,26 @@ class McpTool final : public Tool {
 
 }  // namespace
 
+/// @brief Read mcp.json, start every server in it, collect their tools.
+///
+/// Contract in mcp.hpp. Input and output:
+///
+/// @code
+///   .mini-agent/mcp.json
+///   {"mcpServers": {
+///      "github": {"command": "npx", "args": ["-y", "@mcp/github"]},
+///      "broken": {"command": "no-such-program-xyz"},
+///      "oops":   {"args": ["x"]}
+///   }}
+///
+///   返回
+///     tools   = [mcp__github__search, mcp__github__get_issue, ...]
+///     clients = [github]
+///     errors  = ["MCP server broken 握手失败：initialize：server 已退出（stdout 到达 EOF）",
+///                "MCP server oops 少了 command"]
+///
+///   文件不存在 → {tools=[], clients=[], errors=[]}      ← 没配 MCP 是常态，不报警
+/// @endcode
 McpLoadResult load_mcp_servers(const fs::path& config_path, const fs::path& cwd) {
     McpLoadResult out;
 

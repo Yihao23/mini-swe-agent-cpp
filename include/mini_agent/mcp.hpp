@@ -122,6 +122,16 @@ class McpClient {
     /// @param command The executable.
     /// @param args    Its arguments.
     /// @param cwd     Working directory for the child.
+    ///
+    /// @note Does not throw. A command that cannot be started is recorded and
+    ///       reported by the first request, so one bad server costs its own
+    ///       tools rather than the agent's startup.
+    ///
+    /// @code{.test}
+    /// @setup McpClient bad("nope", "no-such-program-xyz", {}, doc_workdir());
+    /// bad.initialize().has_value()   ==>   false
+    /// bad.name()                     ==>   "nope"
+    /// @endcode
     McpClient(std::string name, std::string command, std::vector<std::string> args,
               const fs::path& cwd);
     ~McpClient();
@@ -139,10 +149,31 @@ class McpClient {
     ///
     /// @note An error is returned rather than thrown: one external server that
     ///       will not start should cost its own tools, not the whole agent.
+    ///
+    /// The mock server sends a `notifications/message` **before** its answer.
+    /// The capabilities below are only reachable because the client matched the
+    /// response by id and stepped over that notification:
+    ///
+    /// @code{.test}
+    /// @setup McpClient c("mock", "python3", {doc_mock_mcp_server()}, doc_workdir());
+    /// @setup const auto caps = c.initialize();
+    /// caps.has_value()                                   ==>   true
+    /// caps->value("protocolVersion", std::string{})      ==>   "2024-11-05"
+    /// caps->contains("capabilities")                     ==>   true
+    /// @endcode
     std::expected<Json, std::string> initialize();
 
     /// @brief Ask what tools the server offers.
     /// @return The `tools` array, or an error description.
+    ///
+    /// @code{.test}
+    /// @setup McpClient c("mock", "python3", {doc_mock_mcp_server()}, doc_workdir());
+    /// @setup (void)c.initialize();
+    /// @setup const auto tools = c.list_tools();
+    /// tools->size()                                      ==>   1u
+    /// (*tools)[0].value("name", std::string{})           ==>   "echo"
+    /// (*tools)[0].contains("inputSchema")                ==>   true
+    /// @endcode
     std::expected<Json, std::string> list_tools();
 
     /// @brief Invoke one of the server's tools.
@@ -156,6 +187,28 @@ class McpClient {
     ///          interleave notifications, which carry no id — read past them
     ///          until the id matches, or a log line arrives where an answer was
     ///          expected.
+    ///
+    /// The server answers with an array of content blocks; the text blocks are
+    /// joined into one string, and `isError` becomes the second member:
+    ///
+    /// @code{.test}
+    /// @setup McpClient c("mock", "python3", {doc_mock_mcp_server()}, doc_workdir());
+    /// @setup (void)c.initialize();
+    /// @setup const auto r = c.call_tool("echo", Json{{"text", "hi"}});
+    /// r.has_value()      ==>   true
+    /// r->first           ==>   "echo: hi"
+    /// r->second          ==>   false
+    /// @endcode
+    ///
+    /// Each call gets its own id, so a second call reads its own answer and not
+    /// the previous one — the two replies below differ only in their text:
+    ///
+    /// @code{.test}
+    /// @setup McpClient c("mock", "python3", {doc_mock_mcp_server()}, doc_workdir());
+    /// @setup (void)c.initialize();
+    /// c.call_tool("echo", Json{{"text", "one"}})->first   ==>   "echo: one"
+    /// c.call_tool("echo", Json{{"text", "two"}})->first   ==>   "echo: two"
+    /// @endcode
     std::expected<std::pair<std::string, bool>, std::string> call_tool(std::string_view name,
                                                                       const Json& args);
 
@@ -164,6 +217,18 @@ class McpClient {
     const std::string& name() const;
 
     /// @brief Shut the server down. Idempotent; the destructor calls it.
+    ///
+    /// @note Closes the server's stdin first and gives it a moment to exit on
+    ///       its own; signals come only if it will not. A request after close()
+    ///       is an error, not a hang.
+    ///
+    /// @code{.test}
+    /// @setup McpClient c("mock", "python3", {doc_mock_mcp_server()}, doc_workdir());
+    /// @setup (void)c.initialize();
+    /// @setup c.close();
+    /// @setup c.close();
+    /// c.list_tools().has_value()   ==>   false
+    /// @endcode
     void close();
 
   private:
@@ -199,6 +264,35 @@ struct McpLoadResult {
 ///       name one server's tools specifically.
 /// @note A server that fails to start is recorded in `errors` rather than
 ///       thrown. Losing one server's tools beats not starting.
+///
+/// No configuration file is the common case, and it is not a warning:
+///
+/// @code{.test}
+/// @setup const auto none = load_mcp_servers(doc_workdir() / "no-such-mcp.json", doc_workdir());
+/// none.tools.empty()    ==>   true
+/// none.errors.empty()   ==>   true
+/// @endcode
+///
+/// A server contributes its tools under a prefixed name, with both flags at
+/// their most conservative:
+///
+/// @code{.test}
+/// @setup const auto r = load_mcp_servers(doc_mcp_config("github"), doc_workdir());
+/// r.tools.size()                      ==>   1u
+/// r.tools[0]->name()                  ==>   "mcp__github__echo"
+/// r.tools[0]->read_only()             ==>   false
+/// r.tools[0]->requires_permission()   ==>   true
+/// r.clients.size()                    ==>   1u
+/// @endcode
+///
+/// One broken entry costs only its own tools:
+///
+/// @code{.test}
+/// @setup const auto mixed = load_mcp_servers(doc_mcp_config("github", true), doc_workdir());
+/// mixed.tools.size()                                        ==>   1u
+/// mixed.errors.size()                                       ==>   1u
+/// mixed.errors[0].find("broken") != std::string::npos       ==>   true
+/// @endcode
 McpLoadResult load_mcp_servers(const fs::path& config_path, const fs::path& cwd);
 
 }  // namespace mini

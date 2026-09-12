@@ -8,6 +8,84 @@
 
 using namespace mini;
 
+/// From include/mini_agent/mcp.hpp:130
+TEST(doc_include_mini_agent_mcp_hpp_L130) {
+    McpClient bad("nope", "no-such-program-xyz", {}, doc_workdir());
+    CHECK_MSG((bad.initialize().has_value()) == (false), "include/mini_agent/mcp.hpp:132 的示例失效了");
+    CHECK_MSG((bad.name()) == ("nope"), "include/mini_agent/mcp.hpp:133 的示例失效了");
+}
+
+/// From include/mini_agent/mcp.hpp:157
+TEST(doc_include_mini_agent_mcp_hpp_L157) {
+    McpClient c("mock", "python3", {doc_mock_mcp_server()}, doc_workdir());
+    const auto caps = c.initialize();
+    CHECK_MSG((caps.has_value()) == (true), "include/mini_agent/mcp.hpp:160 的示例失效了");
+    CHECK_MSG((caps->value("protocolVersion", std::string{})) == ("2024-11-05"), "include/mini_agent/mcp.hpp:161 的示例失效了");
+    CHECK_MSG((caps->contains("capabilities")) == (true), "include/mini_agent/mcp.hpp:162 的示例失效了");
+}
+
+/// From include/mini_agent/mcp.hpp:169
+TEST(doc_include_mini_agent_mcp_hpp_L169) {
+    McpClient c("mock", "python3", {doc_mock_mcp_server()}, doc_workdir());
+    (void)c.initialize();
+    const auto tools = c.list_tools();
+    CHECK_MSG((tools->size()) == (1u), "include/mini_agent/mcp.hpp:173 的示例失效了");
+    CHECK_MSG(((*tools)[0].value("name", std::string{})) == ("echo"), "include/mini_agent/mcp.hpp:174 的示例失效了");
+    CHECK_MSG(((*tools)[0].contains("inputSchema")) == (true), "include/mini_agent/mcp.hpp:175 的示例失效了");
+}
+
+/// From include/mini_agent/mcp.hpp:194
+TEST(doc_include_mini_agent_mcp_hpp_L194) {
+    McpClient c("mock", "python3", {doc_mock_mcp_server()}, doc_workdir());
+    (void)c.initialize();
+    const auto r = c.call_tool("echo", Json{{"text", "hi"}});
+    CHECK_MSG((r.has_value()) == (true), "include/mini_agent/mcp.hpp:198 的示例失效了");
+    CHECK_MSG((r->first) == ("echo: hi"), "include/mini_agent/mcp.hpp:199 的示例失效了");
+    CHECK_MSG((r->second) == (false), "include/mini_agent/mcp.hpp:200 的示例失效了");
+}
+
+/// From include/mini_agent/mcp.hpp:206
+TEST(doc_include_mini_agent_mcp_hpp_L206) {
+    McpClient c("mock", "python3", {doc_mock_mcp_server()}, doc_workdir());
+    (void)c.initialize();
+    CHECK_MSG((c.call_tool("echo", Json{{"text", "one"}})->first) == ("echo: one"), "include/mini_agent/mcp.hpp:209 的示例失效了");
+    CHECK_MSG((c.call_tool("echo", Json{{"text", "two"}})->first) == ("echo: two"), "include/mini_agent/mcp.hpp:210 的示例失效了");
+}
+
+/// From include/mini_agent/mcp.hpp:225
+TEST(doc_include_mini_agent_mcp_hpp_L225) {
+    McpClient c("mock", "python3", {doc_mock_mcp_server()}, doc_workdir());
+    (void)c.initialize();
+    c.close();
+    c.close();
+    CHECK_MSG((c.list_tools().has_value()) == (false), "include/mini_agent/mcp.hpp:230 的示例失效了");
+}
+
+/// From include/mini_agent/mcp.hpp:270
+TEST(doc_include_mini_agent_mcp_hpp_L270) {
+    const auto none = load_mcp_servers(doc_workdir() / "no-such-mcp.json", doc_workdir());
+    CHECK_MSG((none.tools.empty()) == (true), "include/mini_agent/mcp.hpp:272 的示例失效了");
+    CHECK_MSG((none.errors.empty()) == (true), "include/mini_agent/mcp.hpp:273 的示例失效了");
+}
+
+/// From include/mini_agent/mcp.hpp:279
+TEST(doc_include_mini_agent_mcp_hpp_L279) {
+    const auto r = load_mcp_servers(doc_mcp_config("github"), doc_workdir());
+    CHECK_MSG((r.tools.size()) == (1u), "include/mini_agent/mcp.hpp:281 的示例失效了");
+    CHECK_MSG((r.tools[0]->name()) == ("mcp__github__echo"), "include/mini_agent/mcp.hpp:282 的示例失效了");
+    CHECK_MSG((r.tools[0]->read_only()) == (false), "include/mini_agent/mcp.hpp:283 的示例失效了");
+    CHECK_MSG((r.tools[0]->requires_permission()) == (true), "include/mini_agent/mcp.hpp:284 的示例失效了");
+    CHECK_MSG((r.clients.size()) == (1u), "include/mini_agent/mcp.hpp:285 的示例失效了");
+}
+
+/// From include/mini_agent/mcp.hpp:290
+TEST(doc_include_mini_agent_mcp_hpp_L290) {
+    const auto mixed = load_mcp_servers(doc_mcp_config("github", true), doc_workdir());
+    CHECK_MSG((mixed.tools.size()) == (1u), "include/mini_agent/mcp.hpp:292 的示例失效了");
+    CHECK_MSG((mixed.errors.size()) == (1u), "include/mini_agent/mcp.hpp:293 的示例失效了");
+    CHECK_MSG((mixed.errors[0].find("broken") != std::string::npos) == (true), "include/mini_agent/mcp.hpp:294 的示例失效了");
+}
+
 /// From include/mini_agent/message.hpp:143
 TEST(doc_include_mini_agent_message_hpp_L143) {
     const Message m{Role::Assistant, {TextBlock{"Let me look"},
