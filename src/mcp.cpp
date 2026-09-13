@@ -21,6 +21,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
@@ -74,7 +75,10 @@ struct McpClient::Impl {
     int read_fd = -1;
     std::string inbuf;          ///< 读到但还没切成整行的字节
     long next_id = 1;
-    bool closed = false;
+    /// ⚠️ atomic，因为请求方在**拿锁之前**就要看它：close() 一开始就置位，之后
+    ///    新来的请求直接拒绝，不去排队抢锁 —— 否则一个不停调用的线程可能一直
+    ///    抢在 close() 前面，std::mutex 不保证公平。
+    std::atomic<bool> closed{false};
     std::string spawn_error;    ///< 非空 = 进程压根没起来
 
     /// ⚠️ 一根管道上的 JSON-RPC 帧不能交错。两个线程同时发请求，
@@ -205,6 +209,8 @@ struct McpClient::Impl {
         if (closed) return std::unexpected("server 已关闭");
 
         std::lock_guard lock(mu);
+        // 再看一次：等锁的这段时间里 close() 可能已经把 fd 关了。
+        if (closed) return std::unexpected("server 已关闭");
         const long id = next_id++;
         const Json msg{{"jsonrpc", "2.0"}, {"id", id},
                        {"method", std::string(method)}, {"params", std::move(params)}};
@@ -256,9 +262,63 @@ struct McpClient::Impl {
     bool notify(std::string_view method, Json params) {
         if (!spawn_error.empty() || closed) return false;
         std::lock_guard lock(mu);
+        if (closed) return false;   // 等锁时被关掉了
         return send_line(Json{{"jsonrpc", "2.0"},
                               {"method", std::string(method)},
                               {"params", std::move(params)}});
+    }
+
+    /// @brief Shut the server down: close stdin, wait briefly, then signal.
+    ///
+    /// @note Holds the lock for the whole shutdown, so it waits for an
+    ///       in-flight request to finish instead of closing descriptors under
+    ///       it. That wait is bounded by kRequestTimeout. Requests arriving
+    ///       meanwhile see `closed` and fail before queueing for the lock.
+    /// @note Sleeps while holding the lock (the grace period). Anyone blocked
+    ///       on the lock then only finds `closed` set and returns an error.
+    void shutdown() {
+        // 幂等：只有第一个调用者往下走。exchange 同时完成「看」和「置位」——
+        // 分成两步的话，两个线程可能都看到 false，都去关 fd。
+        if (closed.exchange(true)) return;
+
+        // ⚠️ 拿锁：等正在进行的那次请求结束（最多 kRequestTimeout），再动 fd。
+        //    不拿锁就关 fd，那个 fd 号会被本进程下一个 open() 立刻复用 ——
+        //    正卡在 read() 里的请求线程读到的就是别的文件，没有任何症状。
+        //    TSan 在修复前实测报了这里：close() 写 closed、关写端、关读端，
+        //    和持锁请求里的读是同时发生的。
+        std::lock_guard lock(mu);
+        if (pid < 0) return;     // 压根没起来
+
+        // ⚠️ 关 stdin 是**正常的收场方式**：server 在 stdin 上读到 EOF 就该自己退。
+        //    直接发信号也能杀掉，但那样 server 没机会保存状态、清理临时文件。
+        if (write_fd >= 0) {
+            ::close(write_fd);
+            write_fd = -1;
+        }
+
+        // 给它一小会儿自己退。WNOHANG 轮询，不阻塞。
+        const auto deadline = Clock::now() + kShutdownGrace;
+        int status = 0;
+        bool reaped = false;
+        while (Clock::now() < deadline) {
+            const pid_t r = ::waitpid(pid, &status, WNOHANG);
+            if (r == pid) { reaped = true; break; }
+            if (r < 0 && errno != EINTR) { reaped = true; break; }
+            ::usleep(10 * 1000);
+        }
+        if (!reaped) {
+            // 不肯走就动手。杀**进程组** —— npx 起的 node 是孙子进程。
+            ::kill(-pid, SIGTERM);
+            ::usleep(100 * 1000);
+            ::kill(-pid, SIGKILL);
+            while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+        }
+
+        if (read_fd >= 0) {
+            ::close(read_fd);
+            read_fd = -1;
+        }
+        pid = -1;
     }
 };
 
@@ -396,43 +456,11 @@ const std::string& McpClient::name() const { return impl_->name; }
 ///     ④ close(read_fd)，pid = -1
 ///
 ///   close()   再调一次 → 直接返回（closed 已经是 true）
+///
+///   另一个线程正卡在 call_tool 里 → close() 先把 closed 置位，再等那次请求
+///   结束（它持着锁），然后才关 fd。等待期间新来的请求直接返回「server 已关闭」。
 /// @endcode
-void McpClient::close() {
-    if (impl_->closed) return;      // 幂等 —— 析构函数也会调
-    impl_->closed = true;
-    if (impl_->pid < 0) return;     // 压根没起来
-
-    // ⚠️ 关 stdin 是**正常的收场方式**：server 在 stdin 上读到 EOF 就该自己退。
-    //    直接发信号也能杀掉，但那样 server 没机会保存状态、清理临时文件。
-    if (impl_->write_fd >= 0) {
-        ::close(impl_->write_fd);
-        impl_->write_fd = -1;
-    }
-
-    // 给它一小会儿自己退。WNOHANG 轮询，不阻塞。
-    const auto deadline = Clock::now() + kShutdownGrace;
-    int status = 0;
-    bool reaped = false;
-    while (Clock::now() < deadline) {
-        const pid_t r = ::waitpid(impl_->pid, &status, WNOHANG);
-        if (r == impl_->pid) { reaped = true; break; }
-        if (r < 0 && errno != EINTR) { reaped = true; break; }
-        ::usleep(10 * 1000);
-    }
-    if (!reaped) {
-        // 不肯走就动手。杀**进程组** —— npx 起的 node 是孙子进程。
-        ::kill(-impl_->pid, SIGTERM);
-        ::usleep(100 * 1000);
-        ::kill(-impl_->pid, SIGKILL);
-        while (::waitpid(impl_->pid, &status, 0) < 0 && errno == EINTR) {}
-    }
-
-    if (impl_->read_fd >= 0) {
-        ::close(impl_->read_fd);
-        impl_->read_fd = -1;
-    }
-    impl_->pid = -1;
-}
+void McpClient::close() { impl_->shutdown(); }
 
 // ─────────────────────────────────────────────────────────────────────────────
 

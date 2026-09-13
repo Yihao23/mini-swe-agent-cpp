@@ -1020,6 +1020,22 @@ MUTANTS = [
                   "的假 server，那样的用例只在证明自己",
     ),
 
+    dict(
+        name="MCP 请求不加锁",
+        file="src/mcp.cpp",
+        edits=[('        std::lock_guard lock(mu);\n        // 再看一次：等锁的这段时间里 close() 可能已经把 fd 关了。\n', "        // 再看一次：等锁的这段时间里 close() 可能已经把 fd 关了。\n")],
+        binaries=["test_mcp"],
+        expect=["concurrent_calls_on_one_client_each_get_their_own_answer"],
+        note="几个子 agent 同时调同一个 server：帧在管道里交错，A 读到 B 的响应",
+    ),
+    dict(
+        name="MCP close() 不加锁就关 fd",
+        file="src/mcp.cpp",
+        edits=[('        std::lock_guard lock(mu);\n        if (pid < 0) return;     // 压根没起来\n', "        if (pid < 0) return;     // 压根没起来\n")],
+        binaries=["test_mcp"],
+        expect=["closing_while_another_thread_is_calling_neither_crashes_nor_hangs"],
+        note="正在 read() 的请求线程脚下的 fd 被关掉、再被下一个 open() 复用 —— 读到别的文件",
+    ),
     # ── Stage 4：计划清单 ───────────────────────────────────────────────────
     dict(
         name="不限制只能有一条 in_progress",

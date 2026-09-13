@@ -18,11 +18,14 @@
 #include "mini_agent/session.hpp"
 
 #include <unistd.h>
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <string>
+#include <thread>
+#include <vector>
 
 using namespace mini;
 using namespace std::chrono_literals;
@@ -285,6 +288,76 @@ TEST(a_server_entry_without_a_command_is_a_warning) {
     CHECK(r.tools.empty());
     CHECK(r.errors.size() == 1);
     CHECK(has(r.errors[0], "oops"));
+}
+
+// ── 并发：task_graph 的几个子 agent 可能同时调用同一个 server 的工具 ─────────
+
+TEST(concurrent_calls_on_one_client_each_get_their_own_answer) {
+    const auto c = mock_client();
+    CHECK(c->initialize().has_value());
+
+    // ⚠️ 每个线程**调很多次**，而不是一次。mock server 一次应答只要几毫秒，
+    //    每个线程只调一次的话，访问在时间上可能根本不交错 —— task_graph 那条
+    //    并发测试就栽过：只调一次时去掉锁，TSan 一份报告都不出。
+    const int kThreads = 4, kCalls = 25;
+    std::atomic<int> wrong{0}, failed{0};
+    std::vector<std::thread> ts;
+    for (int t = 0; t < kThreads; ++t)
+        ts.emplace_back([&, t] {
+            for (int i = 0; i < kCalls; ++i) {
+                const std::string text = std::format("t{}-{}", t, i);
+                const auto r = c->call_tool("echo", Json{{"text", text}});
+                // 每次文本都不同。锁失效时帧会在管道里交错，或者 A 读到 B 的响应 ——
+                // 那样拿回来的就不是自己发出去的那段文字。
+                if (!r) ++failed;
+                else if (r->first != "echo: " + text) ++wrong;
+            }
+        });
+    for (auto& th : ts) th.join();
+
+    CHECK_MSG(failed == 0, "并发调用不该失败");
+    CHECK_MSG(wrong == 0, "每个线程都要拿回自己那一次的答案");
+}
+
+TEST(closing_while_another_thread_is_calling_neither_crashes_nor_hangs) {
+    const auto c = mock_client();
+    CHECK(c->initialize().has_value());
+
+    std::atomic<bool> saw_ok{false};
+    std::atomic<int> after_close_ok{0};
+    std::atomic<bool> closed{false};
+    std::thread caller([&] {
+        // 一直调到出错为止（最多 2000 次，免得出 bug 时停不下来）
+        for (int i = 0; i < 2000; ++i) {
+            // ⚠️ 在调用**开始之前**看标志。调用返回之后再看的话，一次在 close()
+            //    之前就已经成功的调用，可能恰好在主线程置位之后才检查 ——
+            //    被误算成「关闭之后还成功了」，这条用例就会偶发地红。
+            const bool started_after_close = closed.load();
+            const auto r = c->call_tool("echo", Json{{"text", "x"}});
+            if (!r) return;
+            saw_ok = true;
+            if (started_after_close) ++after_close_ok;
+        }
+    });
+
+    // 等调用方真的在跑，再从另一个线程关掉。
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!saw_ok && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    CHECK(saw_ok.load());
+
+    const auto t0 = std::chrono::steady_clock::now();
+    c->close();
+    closed = true;
+    caller.join();
+
+    // ⚠️ close() 要等正在进行的那次请求结束，而不是在它脚下把 fd 关掉。
+    //    在脚下关掉的话，那个 fd 号会被本进程下一个 open() 复用，
+    //    正在 read() 的线程读到的就是别的文件 —— 没有症状，只有坏数据。
+    CHECK_MSG(std::chrono::steady_clock::now() - t0 < std::chrono::seconds(5),
+              "close() 不能卡住");
+    CHECK_MSG(after_close_ok == 0, "close() 返回之后，调用不该再成功");
+    CHECK(!c->call_tool("echo", Json{{"text", "x"}}).has_value());
 }
 
 // ── 按 server 写权限规则 ────────────────────────────────────────────────────

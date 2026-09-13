@@ -224,6 +224,11 @@ class McpClient {
     /// @note Closes the server's stdin first and gives it a moment to exit on
     ///       its own; signals come only if it will not. A request after close()
     ///       is an error, not a hang.
+    /// @note Safe to call while another thread is inside a request: it waits
+    ///       for that request to finish — at most the request timeout — rather
+    ///       than closing the pipes under it. A descriptor closed mid-read is
+    ///       reused by the next open() in the process, and the reader then reads
+    ///       someone else's file.
     ///
     /// @code{.test}
     /// @setup McpClient c("mock", "python3", {doc_mock_mcp_server()}, doc_workdir());

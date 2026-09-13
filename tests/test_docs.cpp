@@ -52,38 +52,38 @@ TEST(doc_include_mini_agent_mcp_hpp_L209) {
     CHECK_MSG((c.call_tool("echo", Json{{"text", "two"}})->first) == ("echo: two"), "include/mini_agent/mcp.hpp:213 的示例失效了");
 }
 
-/// From include/mini_agent/mcp.hpp:228
-TEST(doc_include_mini_agent_mcp_hpp_L228) {
+/// From include/mini_agent/mcp.hpp:233
+TEST(doc_include_mini_agent_mcp_hpp_L233) {
     McpClient c("mock", "python3", {doc_mock_mcp_server()}, doc_workdir());
     (void)c.initialize();
     c.close();
     c.close();
-    CHECK_MSG((c.list_tools().has_value()) == (false), "include/mini_agent/mcp.hpp:233 的示例失效了");
+    CHECK_MSG((c.list_tools().has_value()) == (false), "include/mini_agent/mcp.hpp:238 的示例失效了");
 }
 
-/// From include/mini_agent/mcp.hpp:276
-TEST(doc_include_mini_agent_mcp_hpp_L276) {
+/// From include/mini_agent/mcp.hpp:281
+TEST(doc_include_mini_agent_mcp_hpp_L281) {
     const auto none = load_mcp_servers(doc_workdir() / "no-such-mcp.json", doc_workdir());
-    CHECK_MSG((none.tools.empty()) == (true), "include/mini_agent/mcp.hpp:278 的示例失效了");
-    CHECK_MSG((none.errors.empty()) == (true), "include/mini_agent/mcp.hpp:279 的示例失效了");
+    CHECK_MSG((none.tools.empty()) == (true), "include/mini_agent/mcp.hpp:283 的示例失效了");
+    CHECK_MSG((none.errors.empty()) == (true), "include/mini_agent/mcp.hpp:284 的示例失效了");
 }
 
-/// From include/mini_agent/mcp.hpp:285
-TEST(doc_include_mini_agent_mcp_hpp_L285) {
+/// From include/mini_agent/mcp.hpp:290
+TEST(doc_include_mini_agent_mcp_hpp_L290) {
     const auto r = load_mcp_servers(doc_mcp_config("github"), doc_workdir());
-    CHECK_MSG((r.tools.size()) == (1u), "include/mini_agent/mcp.hpp:287 的示例失效了");
-    CHECK_MSG((r.tools[0]->name()) == ("mcp__github__echo"), "include/mini_agent/mcp.hpp:288 的示例失效了");
-    CHECK_MSG((r.tools[0]->read_only()) == (false), "include/mini_agent/mcp.hpp:289 的示例失效了");
-    CHECK_MSG((r.tools[0]->requires_permission()) == (true), "include/mini_agent/mcp.hpp:290 的示例失效了");
-    CHECK_MSG((r.clients.size()) == (1u), "include/mini_agent/mcp.hpp:291 的示例失效了");
+    CHECK_MSG((r.tools.size()) == (1u), "include/mini_agent/mcp.hpp:292 的示例失效了");
+    CHECK_MSG((r.tools[0]->name()) == ("mcp__github__echo"), "include/mini_agent/mcp.hpp:293 的示例失效了");
+    CHECK_MSG((r.tools[0]->read_only()) == (false), "include/mini_agent/mcp.hpp:294 的示例失效了");
+    CHECK_MSG((r.tools[0]->requires_permission()) == (true), "include/mini_agent/mcp.hpp:295 的示例失效了");
+    CHECK_MSG((r.clients.size()) == (1u), "include/mini_agent/mcp.hpp:296 的示例失效了");
 }
 
-/// From include/mini_agent/mcp.hpp:296
-TEST(doc_include_mini_agent_mcp_hpp_L296) {
+/// From include/mini_agent/mcp.hpp:301
+TEST(doc_include_mini_agent_mcp_hpp_L301) {
     const auto mixed = load_mcp_servers(doc_mcp_config("github", true), doc_workdir());
-    CHECK_MSG((mixed.tools.size()) == (1u), "include/mini_agent/mcp.hpp:298 的示例失效了");
-    CHECK_MSG((mixed.errors.size()) == (1u), "include/mini_agent/mcp.hpp:299 的示例失效了");
-    CHECK_MSG((mixed.errors[0].find("broken") != std::string::npos) == (true), "include/mini_agent/mcp.hpp:300 的示例失效了");
+    CHECK_MSG((mixed.tools.size()) == (1u), "include/mini_agent/mcp.hpp:303 的示例失效了");
+    CHECK_MSG((mixed.errors.size()) == (1u), "include/mini_agent/mcp.hpp:304 的示例失效了");
+    CHECK_MSG((mixed.errors[0].find("broken") != std::string::npos) == (true), "include/mini_agent/mcp.hpp:305 的示例失效了");
 }
 
 /// From include/mini_agent/message.hpp:143
