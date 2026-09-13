@@ -5,8 +5,12 @@
 // 【Stage 5】长期记忆 —— 跨会话存活的知识，存成一堆 Markdown 文件。
 //
 //     .mini-agent/memory/
-//         MEMORY.md            ← 索引，每条一行，随 system prompt 进上下文
 //         prefers-pytest.md    ← 一条记忆一个文件，带 frontmatter
+//         commit-style.md
+//
+//     索引**不是文件**：加载时从每个文件的 frontmatter 现场拼出来（index_text()），
+//     每条一行，随 system prompt 进上下文。目录里要是真放一个 MEMORY.md，它只会被
+//     当成又一条记忆去解析 —— 没有 frontmatter 或没有 description 就被跳过。
 //
 // **渐进式披露**：只有索引常驻上下文，正文要 agent 主动 load。
 // 这是 memory 和 skills 共用的一招 —— 用一行摘要换一次按需加载。

@@ -305,7 +305,7 @@
     <div class="plate-head">
       <span class="plate-no">图 1</span>
       <h2>分层与依赖方向</h2>
-      <p class="claim">依赖只向下。<code>Agent</code> 只认识三个协作者，其余全是被它们借用的能力。</p>
+      <p class="claim">依赖只向下。<code>Agent</code> 只和三个协作者打交道；<code>Config</code> 和 <code>ToolContext</code> 它只读，用来拼 prompt。</p>
     </div>
     <div class="canvas">
       <svg viewBox="0 0 900 470" role="img"
@@ -346,7 +346,7 @@
 
         <rect class="box" x="372" y="232" width="250" height="56" />
         <text class="t-name" x="386" y="256">Executor · ToolRegistry</text>
-        <text class="t-sub" x="386" y="273">授权 · 并发 · 超时 · 截断</text>
+        <text class="t-sub" x="386" y="273">授权 · 超时 · 截断 · 目前串行</text>
         <text class="t-tag" x="610" y="248" text-anchor="end">S2</text>
 
         <rect class="box" x="638" y="232" width="252" height="56" />
@@ -410,7 +410,8 @@
         <line class="edge-dash" x1="497" y1="288" x2="497" y2="304" marker-end="url(#ar-soft)" />
         <line class="edge-dash" x1="723" y1="288" x2="723" y2="304" marker-end="url(#ar-soft)" />
         <line class="edge-dash" x1="836" y1="288" x2="836" y2="304" marker-end="url(#ar-soft)" />
-        <text class="t-edge" x="640" y="299">后台任务 / 子 agent / MCP 远程工具都包成普通 Tool</text>
+        <!-- 以前夹在两排方框之间 16px 的缝里，压着虚线，结尾还出了画布。放到图底空白处 -->
+        <text class="t-edge" x="890" y="458" text-anchor="end">虚线：后台任务 / 子 agent / MCP 远程工具都包成普通 Tool</text>
       </svg>
     </div>
     <figcaption>
@@ -458,15 +459,15 @@
         <!-- decision diamond -->
         <polygon class="box" points="260,462 410,506 260,550 110,506" />
         <text class="t-name-s" x="260" y="503" text-anchor="middle">parsed.wants_tools()</text>
-        <text class="t-sub" x="260" y="520" text-anchor="middle">只看 stop_reason 够吗？</text>
+        <text class="t-sub" x="260" y="520" text-anchor="middle">有 tool_use 且不是 end_turn</text>
 
         <rect class="box" x="90" y="584" width="340" height="58" />
         <text class="t-name" x="104" y="608">Executor::run_batch</text>
-        <text class="t-sub" x="104" y="626">全只读才并发 · 有副作用一律串行</text>
+        <text class="t-sub" x="104" y="626">逐个串行 · 结果顺序和调用一致</text>
         <text class="t-tag" x="418" y="600" text-anchor="end">S2</text>
 
         <rect class="box" x="90" y="676" width="400" height="58" />
-        <text class="t-name" x="104" y="700">Sandbox::check → Tool::run</text>
+        <text class="t-name" x="104" y="700">Sandbox::authorize → Tool::run</text>
         <text class="t-sub" x="104" y="718">见图 3 · 结果是值不是异常</text>
         <text class="t-tag" x="478" y="692" text-anchor="end">S2·S3</text>
 
@@ -520,11 +521,11 @@
     </div>
     <div class="canvas">
       <svg viewBox="0 0 880 420" role="img"
-           aria-label="权限判断流程：工具调用先拆分命令，再依次通过模式、规则、硬检查三道关卡，输出 Allow、Deny 或 Ask 三种结果，Ask 交给人决定拒绝、允许一次或本会话总是允许。">
+           aria-label="权限判断流程：依次检查 deny 规则、免检开关、危险命令、allow 规则和权限模式，哪一步给出结论就停在哪一步，输出 Allow、Deny 或 Ask 三种结果，Ask 交给人决定拒绝、允许一次或本会话总是允许。">
 
         <!-- hazard bracket over the gates -->
-        <polyline class="edge-hz" points="390,74 390,64 840,64 840,74" />
-        <text class="t-hz" x="615" y="54" text-anchor="middle">三道关卡串联：任一拒绝即拒绝</text>
+        <polyline class="edge-hz" points="200,74 200,64 840,64 840,74" />
+        <text class="t-hz" x="520" y="54" text-anchor="middle">依次判定：哪一步给出结论就停在哪一步</text>
 
         <!-- chain -->
         <rect class="box-plain" x="20" y="80" width="140" height="60" />
@@ -532,23 +533,24 @@
         <text class="t-sub" x="32" y="123">name + args</text>
 
         <rect class="box" x="200" y="80" width="150" height="60" />
-        <text class="t-name-s" x="212" y="106">split_command</text>
-        <text class="t-sub" x="212" y="123">按 &amp;&amp; || ; | 拆段</text>
+        <text class="t-num" x="212" y="103">①</text>
+        <text class="t-cn" x="230" y="104">deny 规则</text>
+        <text class="t-sub" x="212" y="123">对所有工具，含免检的</text>
 
         <rect class="box" x="390" y="80" width="110" height="60" />
         <text class="t-num" x="402" y="103">①</text>
-        <text class="t-cn" x="420" y="104">模式</text>
-        <text class="t-sub" x="402" y="123">readonly…yolo</text>
+        <text class="t-cn" x="420" y="104">免检</text>
+        <text class="t-sub" x="402" y="123">无需询问 → 放行</text>
 
         <rect class="box" x="540" y="80" width="120" height="60" />
         <text class="t-num" x="552" y="103">②</text>
-        <text class="t-cn" x="570" y="104">规则</text>
-        <text class="t-sub" x="552" y="123">Write(src/**)</text>
+        <text class="t-cn" x="570" y="104">危险命令</text>
+        <text class="t-sub" x="552" y="123">bash：整行 + 逐段</text>
 
         <rect class="box" x="700" y="80" width="140" height="60" />
         <text class="t-num" x="712" y="103">③</text>
-        <text class="t-cn" x="730" y="104">硬检查</text>
-        <text class="t-sub" x="712" y="123">路径逃逸 · 危险命令</text>
+        <text class="t-cn" x="730" y="104">规则 → 模式</text>
+        <text class="t-sub" x="712" y="123">没命中规则才看模式</text>
 
         <line class="edge" x1="160" y1="110" x2="198" y2="110" marker-end="url(#ar)" />
         <line class="edge" x1="350" y1="110" x2="388" y2="110" marker-end="url(#ar)" />
@@ -559,7 +561,7 @@
         <line class="edge" x1="770" y1="140" x2="770" y2="196" />
         <line class="edge" x1="140" y1="200" x2="770" y2="200" />
         <circle class="ah-ink" cx="770" cy="200" r="3.2" />
-        <text class="t-edge" x="430" y="192" text-anchor="middle">Decision — 三态，不是布尔</text>
+        <text class="t-edge" x="430" y="192" text-anchor="middle">每一步都可能在这里给出结论 — 三态，不是布尔</text>
 
         <line class="edge-key" x1="140" y1="200" x2="140" y2="246" marker-end="url(#ar-key)" />
         <line class="edge" x1="430" y1="200" x2="430" y2="246" marker-end="url(#ar)" />
@@ -592,13 +594,18 @@
         <rect class="box-plain" x="768" y="344" width="72" height="34" />
         <text class="t-name-s" x="804" y="366" text-anchor="middle">Always</text>
 
-        <text class="t-hz" x="600" y="400">asker 为空（CI、子 agent）时 Ask 该退化成什么？—— 这条得你自己定</text>
+        <text class="t-hz" x="840" y="400" text-anchor="end">asker 为空（CI、子 agent）时 Ask 一律落成 Deny</text>
       </svg>
     </div>
     <figcaption>
-      <strong><code>split_command</code> 在三道关卡之前</strong>，因为
-      <code>git status &amp;&amp; rm -rf /</code> 整条看是安全的、拆开才不是 —— 这一步不做，后面全白搭。
-      <code>Ask</code> 是三态里最重要的那个：设计成 <code>bool</code>，后面加交互确认要整层重写。
+      <strong>bash 命令既整行查、也拆段查</strong>：<code>git status &amp;&amp; rm -rf /</code>
+      整行看像是安全的，拆开才露馅；<code>curl … | sh</code> 正相反，拆开就丢了那根管道。
+      <strong>模式只在没有规则命中时兜底</strong>，所以 <code>--mode yolo</code> 不会让 deny 规则失效，
+      readonly 模式下一条 allow 规则也照样放行。规则的工具名是 glob，
+      <code>Mcp__github__*</code> 能盖住一个 MCP server 的全部工具；写错的规则启动时会给警告。
+      <span class="hz">路径逃逸不在这条流水线里</span>：读写文件的工具各自调 <code>resolve_path</code>，
+      是平行的另一道检查。<code>Ask</code> 是三态里最重要的那个：设计成 <code>bool</code>，
+      后面加交互确认要整层重写。
     </figcaption>
   </figure>
 
@@ -638,7 +645,7 @@
 
         <rect class="box" x="460" y="60" width="106" height="64" />
         <text class="t-name-s" x="513" y="88" text-anchor="middle">memory 索引</text>
-        <text class="t-sub" x="513" y="105" text-anchor="middle">MEMORY.md</text>
+        <text class="t-sub" x="513" y="105" text-anchor="middle">index_text()</text>
 
         <!-- cache breakpoint -->
         <line class="edge-key" x1="569" y1="56" x2="569" y2="128" />
@@ -651,13 +658,14 @@
 
         <rect class="box" x="758" y="60" width="102" height="64" />
         <text class="t-name-s" x="809" y="84" text-anchor="middle">reminder</text>
-        <text class="t-sub" x="809" y="99" text-anchor="middle">时间 · 后台</text>
-        <text class="t-sub" x="809" y="113" text-anchor="middle">通知 · todo</text>
+        <text class="t-sub" x="809" y="99" text-anchor="middle">后台通知</text>
+        <text class="t-sub" x="809" y="113" text-anchor="middle">todo</text>
 
         <text class="t-hz" x="20" y="172">断点之前混进一个时间戳或 uuid → 它后面的一切（也就是整段对话）每轮全额重新计费</text>
 
         <line class="hair" x1="20" y1="196" x2="860" y2="196" />
-        <text class="t-layer" x="20" y="222">渐进式披露 — MEMORY 与 SKILLS 共用的一招</text>
+        <!-- 放在右边：左边有一条从「索引常驻」上去的虚线，放在 x=20 会被它从中间穿过 -->
+        <text class="t-layer" x="860" y="222" text-anchor="end">渐进式披露 — MEMORY 与 SKILLS 共用的一招</text>
 
         <!-- progressive disclosure chain -->
         <rect class="box" x="20" y="240" width="190" height="60" />
@@ -689,8 +697,8 @@
     </div>
     <figcaption>
       <strong>缓存是前缀逐字节匹配的</strong>，所以这张图其实是一条纪律而不是一个结构：
-      静态的（身份、工具用法、两个索引、工作区路径）进 <code>system</code>，
-      动态的（当前时间、后台任务通知、todo 变化）一律包进 user 轮的
+      静态的（身份、工具用法、工作区路径、项目说明文件、两个索引）进 <code>system</code>，
+      动态的（后台任务通知、todo）一律包进 user 轮的
       <code>&lt;system-reminder&gt;</code>。工具表排在最前面，
       <span class="hz">顺序一变整个缓存前缀就废了</span> —— 这就是
       <code>tool_schemas_are_sorted</code> 那个测试存在的理由。
@@ -705,88 +713,101 @@
       <p class="claim">成员按声明顺序构造、按逆序析构。被指向的必须在前面，<code>agent</code> 必须最后。</p>
     </div>
     <div class="canvas">
-      <svg viewBox="0 0 880 470" role="img"
-           aria-label="App::Impl 的十一个成员按声明顺序排列，第十个 ToolContext 用非拥有裸指针指回前面七个成员，第十一个 Agent 持有 ToolContext 的引用，因此必须最后声明。">
+      <svg viewBox="0 0 880 546" role="img"
+           aria-label="App::Impl 的十三个成员按声明顺序排列，第十二个 ToolContext 用非拥有裸指针指回前面七个成员，第十三个 Agent 持有 ToolContext 的引用，因此必须最后声明。">
 
-        <line class="edge-key" x1="196" y1="34" x2="196" y2="410" marker-end="url(#ar-key)" />
-        <text class="t-edge-key" x="186" y="220" text-anchor="middle"
-              transform="rotate(-90 186 220)">声明顺序 = 构造顺序（析构逆序）</text>
+        <line class="edge-key" x1="196" y1="34" x2="196" y2="478" marker-end="url(#ar-key)" />
+        <text class="t-edge-key" x="186" y="255" text-anchor="middle"
+              transform="rotate(-90 186 255)">声明顺序 = 构造顺序（析构逆序）</text>
 
-        <!-- 11 members -->
-        <rect class="box" x="250" y="40" width="280" height="28" />
+        <!-- 13 members -->
+        <rect class="box" x="250" y="40" width="300" height="28" />
         <text class="t-num" x="234" y="59" text-anchor="end">1</text>
         <text class="t-name-s" x="262" y="59">Config cfg</text>
-        <text class="t-sub" x="518" y="59" text-anchor="end">按值持有一份拷贝</text>
+        <text class="t-sub" x="538" y="59" text-anchor="end">按值持有一份拷贝</text>
 
-        <rect class="box" x="250" y="74" width="280" height="28" />
+        <rect class="box" x="250" y="74" width="300" height="28" />
         <text class="t-num" x="234" y="93" text-anchor="end">2</text>
         <text class="t-name-s" x="262" y="93">unique_ptr&lt;LlmClient&gt; llm</text>
 
-        <rect class="box" x="250" y="108" width="280" height="28" />
+        <rect class="box" x="250" y="108" width="300" height="28" />
         <text class="t-num" x="234" y="127" text-anchor="end">3</text>
-        <text class="t-name-s" x="262" y="127">Sandbox sandbox</text>
+        <text class="t-name-s" x="262" y="127">EventSink on_event</text>
 
-        <rect class="box" x="250" y="142" width="280" height="28" />
+        <rect class="box" x="250" y="142" width="300" height="28" />
         <text class="t-num" x="234" y="161" text-anchor="end">4</text>
-        <text class="t-name-s" x="262" y="161">BackgroundManager background</text>
+        <text class="t-name-s" x="262" y="161">vector&lt;string&gt; warnings</text>
 
-        <rect class="box" x="250" y="176" width="280" height="28" />
+        <rect class="box" x="250" y="176" width="300" height="28" />
         <text class="t-num" x="234" y="195" text-anchor="end">5</text>
-        <text class="t-name-s" x="262" y="195">Memory memory</text>
+        <text class="t-name-s" x="262" y="195">Sandbox sandbox</text>
 
-        <rect class="box" x="250" y="210" width="280" height="28" />
+        <rect class="box" x="250" y="210" width="300" height="28" />
         <text class="t-num" x="234" y="229" text-anchor="end">6</text>
-        <text class="t-name-s" x="262" y="229">SkillRegistry skills</text>
+        <text class="t-name-s" x="262" y="229">optional&lt;Memory&gt; memory</text>
 
-        <rect class="box" x="250" y="244" width="280" height="28" />
+        <rect class="box" x="250" y="244" width="300" height="28" />
         <text class="t-num" x="234" y="263" text-anchor="end">7</text>
-        <text class="t-name-s" x="262" y="263">McpClient mcp</text>
+        <text class="t-name-s" x="262" y="263">optional&lt;SkillRegistry&gt; skills</text>
 
-        <rect class="box" x="250" y="278" width="280" height="28" />
+        <rect class="box" x="250" y="278" width="300" height="28" />
         <text class="t-num" x="234" y="297" text-anchor="end">8</text>
-        <text class="t-name-s" x="262" y="297">ToolRegistry registry</text>
-        <text class="t-sub" x="518" y="297" text-anchor="end">shared_ptr&lt;Tool&gt;</text>
+        <text class="t-name-s" x="262" y="297">optional&lt;BackgroundManager&gt; background</text>
 
-        <rect class="box" x="250" y="312" width="280" height="28" />
+        <rect class="box" x="250" y="312" width="300" height="28" />
         <text class="t-num" x="234" y="331" text-anchor="end">9</text>
-        <text class="t-name-s" x="262" y="331">Session session</text>
+        <text class="t-name-s" x="262" y="331">McpLoadResult mcp</text>
+        <text class="t-sub" x="538" y="331" text-anchor="end">在 registry 之前</text>
 
-        <rect class="box-key" x="250" y="346" width="280" height="28" />
+        <rect class="box" x="250" y="346" width="300" height="28" />
         <text class="t-num" x="234" y="365" text-anchor="end">10</text>
-        <text class="t-name-s" x="262" y="365">ToolContext ctx</text>
-        <text class="t-sub" x="518" y="365" text-anchor="end">全是裸指针</text>
+        <text class="t-name-s" x="262" y="365">ToolRegistry registry</text>
+        <text class="t-sub" x="538" y="365" text-anchor="end">shared_ptr&lt;Tool&gt;</text>
 
-        <rect class="box-key" x="250" y="380" width="280" height="28" />
+        <rect class="box" x="250" y="380" width="300" height="28" />
         <text class="t-num" x="234" y="399" text-anchor="end">11</text>
-        <text class="t-name-s" x="262" y="399">Agent agent</text>
-        <text class="t-sub" x="518" y="399" text-anchor="end">持有 ctx 的引用</text>
+        <text class="t-name-s" x="262" y="399">Session session</text>
+
+        <rect class="box-key" x="250" y="414" width="300" height="28" />
+        <text class="t-num" x="234" y="433" text-anchor="end">12</text>
+        <text class="t-name-s" x="262" y="433">ToolContext ctx</text>
+        <text class="t-sub" x="538" y="433" text-anchor="end">全是裸指针</text>
+
+        <rect class="box-key" x="250" y="448" width="300" height="28" />
+        <text class="t-num" x="234" y="467" text-anchor="end">13</text>
+        <text class="t-name-s" x="262" y="467">unique_ptr&lt;Agent&gt; agent</text>
+        <text class="t-sub" x="538" y="467" text-anchor="end">持有 ctx 的引用</text>
 
         <!-- pointer bracket: ctx -> earlier members -->
-        <polyline class="edge-dash" points="530,360 566,360 566,54" />
-        <line class="edge-dash" x1="566" y1="54" x2="534" y2="54" marker-end="url(#ar-soft)" />
-        <line class="edge-dash" x1="566" y1="122" x2="534" y2="122" marker-end="url(#ar-soft)" />
-        <line class="edge-dash" x1="566" y1="156" x2="534" y2="156" marker-end="url(#ar-soft)" />
-        <line class="edge-dash" x1="566" y1="190" x2="534" y2="190" marker-end="url(#ar-soft)" />
-        <line class="edge-dash" x1="566" y1="224" x2="534" y2="224" marker-end="url(#ar-soft)" />
-        <line class="edge-dash" x1="566" y1="292" x2="534" y2="292" marker-end="url(#ar-soft)" />
-        <line class="edge-dash" x1="566" y1="326" x2="534" y2="326" marker-end="url(#ar-soft)" />
+        <polyline class="edge-dash" points="550,428 586,428 586,54" />
+        <line class="edge-dash" x1="586" y1="54" x2="554" y2="54" marker-end="url(#ar-soft)" />
+        <line class="edge-dash" x1="586" y1="190" x2="554" y2="190" marker-end="url(#ar-soft)" />
+        <line class="edge-dash" x1="586" y1="224" x2="554" y2="224" marker-end="url(#ar-soft)" />
+        <line class="edge-dash" x1="586" y1="258" x2="554" y2="258" marker-end="url(#ar-soft)" />
+        <line class="edge-dash" x1="586" y1="292" x2="554" y2="292" marker-end="url(#ar-soft)" />
+        <line class="edge-dash" x1="586" y1="360" x2="554" y2="360" marker-end="url(#ar-soft)" />
+        <line class="edge-dash" x1="586" y1="394" x2="554" y2="394" marker-end="url(#ar-soft)" />
 
-        <text class="t-edge" x="586" y="186">ToolContext 是一个“借来的引用包”</text>
-        <text class="t-edge" x="586" y="204">—— 非拥有裸指针，指向上面这些成员</text>
-        <text class="t-edge" x="586" y="230">所以它们必须先构造完毕</text>
+        <text class="t-edge" x="606" y="222">ToolContext 是一个“借来的引用包”</text>
+        <text class="t-edge" x="606" y="240">—— 非拥有裸指针，指向上面这 7 个成员</text>
+        <text class="t-edge" x="606" y="266">所以它们必须先构造完毕</text>
 
         <!-- hazard leaders -->
-        <polyline class="edge-hz" points="530,394 600,394 640,412" />
-        <text class="t-hz" x="646" y="416">agent 写在别处 → 拿到还没初始化的对象</text>
-        <text class="t-hz" x="250" y="440">这类顺序 bug 只在 release 构建下偶尔炸。当前构建类型正是 RelWithDebInfo。</text>
-        <text class="t-hz" x="250" y="458">App 因此显式 delete 了拷贝与移动 —— 移动只会留下一个 impl_ 为空的壳。</text>
+        <polyline class="edge-hz" points="550,462 600,462 630,478" />
+        <text class="t-hz" x="636" y="482">agent 写在别处 → 拿到还没初始化的对象</text>
+        <text class="t-hz" x="250" y="506">这类顺序 bug 只在 release 构建下偶尔炸。当前构建类型正是 RelWithDebInfo。</text>
+        <text class="t-hz" x="250" y="524">App 因此显式 delete 了拷贝与移动 —— 移动只会留下一个 impl_ 为空的壳。</text>
       </svg>
     </div>
     <figcaption>
-      这十一个成员住在 <code>App::Impl</code> 里（<code>src/app.cpp</code>），不在头文件里。
+      这十三个成员住在 <code>App::Impl</code> 里（<code>src/app.cpp</code>），不在头文件里。
       <strong>pimpl 在这里换来两样东西</strong>：顺序声明和构造函数挨在同一个文件、
       调整顺序不会引起全项目重编译。它顺带还让 <code>Impl</code> 待在堆上一动不动，
       那些裸指针天然保持有效。
+      <strong>逆序析构也管着两件事</strong>：<code>agent</code> 先于 <code>background</code> 析构 ——
+      循环彻底不再碰后台任务了，才去杀那些子进程；<code>mcp</code> 声明在 <code>registry</code> 之前 ——
+      远程工具先释放它们持有的 client，server 进程才退出。
+      <code>impl_</code> 包在 <code>propagate_const</code> 里，<code>App</code> 的 const 方法改不了 <code>Impl</code>。
     </figcaption>
   </figure>
 
@@ -810,7 +831,7 @@
     </ul>
   </div>
 
-  <footer>mini-swe-agent-cpp · 21 个模块 · 2681 行 · 15 个冒烟测试即规格说明</footer>
+  <footer>mini-swe-agent-cpp · 21 个模块 · src + include 共 11686 行 · 15 个冒烟测试即规格说明 · 22 个测试程序 · 102 条变异</footer>
 
 </div>
 </body>
