@@ -16,6 +16,30 @@ endif()
 add_compile_options(-Wall -Wextra -Wpedantic)
 
 # ---------------------------------------------------------------------------
+# Sanitizer：-DMINI_AGENT_SANITIZE=thread（或 address）。放在单独的构建目录里：
+#
+#   cmake -S . -B build-tsan -DMINI_AGENT_SANITIZE=thread
+#   cmake --build build-tsan && ctest --test-dir build-tsan
+#
+# 为什么要 TSan：后台任务和调度器里的并发约束（buffer 和 cursor 同一把锁、
+# 握着锁建线程、放锁之后再 sleep、fd 只由读线程关）全都写在 ⚠️ 注释里，
+# 单元测试抓不住 —— 竞态是概率性的，本地跑一百次都对。TSan 看的是每一次
+# 内存访问有没有被锁保护，和那一次有没有真的撞上无关。
+# ---------------------------------------------------------------------------
+set(MINI_AGENT_SANITIZE "" CACHE STRING "Sanitizer to build with: thread, address, or empty")
+if(MINI_AGENT_SANITIZE)
+  add_compile_options(-fsanitize=${MINI_AGENT_SANITIZE} -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=${MINI_AGENT_SANITIZE})
+  if(MINI_AGENT_SANITIZE STREQUAL "thread")
+    # ⚠️ 较新的内核把 vm.mmap_rnd_bits 调得很高，TSan 一启动就报
+    #    "unexpected memory mapping" 然后退出 —— 测试一条都没跑。
+    #    setarch -R 只对这一个进程关掉地址随机化，不用改系统设置。
+    #    add_test(COMMAND <target>) 会把这个"模拟器"加在命令前面，ctest 照常用。
+    set(CMAKE_CROSSCOMPILING_EMULATOR setarch ${CMAKE_HOST_SYSTEM_PROCESSOR} -R)
+  endif()
+endif()
+
+# ---------------------------------------------------------------------------
 # 依赖：只有两个，而且都被隔离在很薄的一层后面
 #   nlohmann/json —— 只在 json.hpp 里 typedef 一次，换掉只改一个文件
 #   libcurl       —— 只有 src/llm.cpp 和 src/http.cpp 用到

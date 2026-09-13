@@ -1,4 +1,5 @@
 build/
+build-*/
 compile_commands.json
 .mini-agent/
 .cache/
