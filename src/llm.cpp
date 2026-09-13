@@ -109,11 +109,11 @@ std::string Usage::summary() const {
 ///
 /// @note usage_ 本身在头文件的类里（它是 I4 的主角），锁放在这里是为了不让
 ///       llm.hpp 的每个包含者都看到 <mutex> 的实现细节 —— pimpl 的老理由。
-/// @note 在 const 的 usage() 里给这把锁上锁能编译通过，是因为 impl_ 是指针，
-///       const 传不过去。这里是「逻辑上的 const」，是有意的；但编译器并没有
-///       在检查它。
+/// @note mutable：usage() 是 const，但要加锁拷贝快照。加锁不改变可观测状态，
+///       是「逻辑上的 const」。impl_ 包在 propagate_const 里，const 会传进 Impl，
+///       所以这里必须写明 —— 以前是裸 unique_ptr，不写也能编译，编译器根本没在查。
 struct AnthropicClient::Impl {
-    std::mutex usage_mu;   ///< 保护 AnthropicClient::usage_ 的累加和快照
+    mutable std::mutex usage_mu;   ///< 保护 AnthropicClient::usage_ 的累加和快照
 };
 
 /// @brief A snapshot of the running totals.

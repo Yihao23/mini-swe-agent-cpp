@@ -66,7 +66,11 @@ struct BackgroundTask {
 };
 
 struct BackgroundManager::Impl {
-    std::mutex mu;
+    /// ⚠️ mutable：render_list() 是 const，但它要加锁读 tasks。加锁不改变任何
+    ///    可观测的状态，是「逻辑上的 const」。以前 impl_ 是裸 unique_ptr，const 传不
+    ///    进 Impl，不写 mutable 也照样编译；换成 propagate_const 之后编译器才开始
+    ///    检查，这个关键字就是让「const 方法里在上锁」这件事写在明处。
+    mutable std::mutex mu;
     std::map<std::string, BackgroundTask> tasks;
     int counter = 0;
 

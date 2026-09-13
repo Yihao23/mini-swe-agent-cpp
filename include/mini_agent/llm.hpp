@@ -156,7 +156,9 @@
 //    调用方的义务，类自己检查不了 —— 和 sandbox / loop 那两处同一类。
 //
 #include <expected>
+#include <experimental/propagate_const>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -344,7 +346,11 @@ class AnthropicClient final : public LlmClient {
     const Config& cfg_;
     Usage usage_;
     struct Impl;                 // pimpl：只有一把保护 usage_ 的锁
-    std::unique_ptr<Impl> impl_;
+    // ⚠️ propagate_const，不是裸 unique_ptr。裸指针成员在 const 方法里只有指针
+    //    本身是 const，指向的 Impl 仍然可改 —— const 方法能悄悄改掉 Impl 的任何
+    //    字段，编译器一声不吭。包上这一层，const 才传得进 Impl。
+    //    std::experimental：GCC/Clang 的 libstdc++/libc++ 有，MSVC 没有；本项目只跑 Linux。
+    std::experimental::propagate_const<std::unique_ptr<Impl>> impl_;
 };
 
 // ---------------------------------------------------------------------------

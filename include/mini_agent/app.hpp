@@ -119,6 +119,7 @@
 //   一条解析不了的权限规则、一个起不来的 MCP server —— 都收进 warnings()，
 //   不抛。为了 config 里的一行写错就不让 agent 启动，代价比收益大得多。
 //
+#include <experimental/propagate_const>
 #include <memory>
 #include <string>
 #include <vector>
@@ -214,7 +215,11 @@ class App {
 
   private:
     struct Impl;                      // 成员顺序敏感，全关在 .cpp 里更省心
-    std::unique_ptr<Impl> impl_;
+    // ⚠️ propagate_const，不是裸 unique_ptr。裸指针成员在 const 方法里只有指针
+    //    本身是 const，指向的 Impl 仍然可改 —— const 方法能悄悄改掉 Impl 的任何
+    //    字段，编译器一声不吭。包上这一层，const 才传得进 Impl。
+    //    std::experimental：GCC/Clang 的 libstdc++/libc++ 有，MSVC 没有；本项目只跑 Linux。
+    std::experimental::propagate_const<std::unique_ptr<Impl>> impl_;
 };
 
 }  // namespace mini
