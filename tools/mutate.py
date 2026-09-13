@@ -834,6 +834,19 @@ MUTANTS = [
         note="模型可以自己解除超时限制",
     ),
 
+    # ── 并发：共用一个 LLM client 的子 agent ───────────────────────────────
+    dict(
+        name="FakeLlm::complete 不加锁",
+        file="src/llm.cpp",
+        edits=[('    std::lock_guard lock(mu_);\n\n    // 三样都要记', "\n    // 三样都要记")],
+        binaries=["test_subagent"],
+        expect=["task_graph_runs_independent_subagents_at_once_on_one_client"],
+        note="task_graph 的几个子 agent 同时调用同一个 client，剧本、calls_、usage_ 全是共享的",
+        known_gap="只有 ThreadSanitizer 看得见：cmake -B build-tsan -DMINI_AGENT_SANITIZE=thread "
+                  "之后，这条用例会报 FakeLlm::complete 上的数据竞争（实测）。普通构建里两个线程"
+                  "同时 push_back 大多数时候碰巧不丢记录，calls().size() == 26 照样成立。"
+                  "mutate.py 只跑普通构建，所以这里记成已知未覆盖",
+    ),
     # ── Stage 7：规则匹配 —— 工具名是 glob，记住的批准是字面量 ──────────────
     dict(
         name="工具名退回逐字符比较",

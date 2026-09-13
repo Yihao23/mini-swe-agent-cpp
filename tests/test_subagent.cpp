@@ -18,9 +18,13 @@
 
 #include <unistd.h>
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <mutex>
+#include <thread>
 
 using namespace mini;
 namespace fs = std::filesystem;
@@ -270,7 +274,11 @@ TEST(task_tool_validates_its_arguments) {
 TEST(task_graph_runs_the_graph_and_passes_upstream_results) {
     Fixture f;
     std::vector<std::string> seen;
-    f.ctx.spawn = [&seen](std::string_view, std::string_view prompt) {
+    std::mutex seen_mu;
+    // ⚠️ 回调在调度器的工作线程里跑。这张图是一条依赖链，a 和 b 实际上是先后
+    //    执行的；但不加锁的话，只要有人把 deps 删掉，测试代码自己就先有了竞态。
+    f.ctx.spawn = [&seen, &seen_mu](std::string_view, std::string_view prompt) {
+        const std::lock_guard lock(seen_mu);
         seen.emplace_back(prompt);
         return "结论(" + std::string(prompt.substr(0, 1)) + ")";
     };
@@ -290,6 +298,58 @@ TEST(task_graph_runs_the_graph_and_passes_upstream_results) {
     });
     CHECK(b_prompt != seen.end());
     CHECK_MSG(has(*b_prompt, "结论(A)"), "下游要看到上游的结论");
+}
+
+TEST(task_graph_runs_independent_subagents_at_once_on_one_client) {
+    using namespace std::chrono_literals;
+    Fixture f;
+    // 剧本：一串一模一样的 glob 调用，用完之后是兜底的 "done"。
+    // ⚠️ 每个子 agent 要调用 LLM **很多次**，而不是一次。FakeLlm 一次调用只要
+    //    微秒，只调一次的话后到的那个子 agent 能在先到的那个醒来之前就跑完，
+    //    两边对 client 的访问在时间上根本没交错 —— 实测 TSan 在那种情况下
+    //    一份报告都不出。十几次交替调用才让共享 client 真正被两个线程同时碰到。
+    //    两个子 agent 谁拿到几条不确定，测试不依赖分配。
+    std::vector<FakeLlm::Turn> script;
+    for (int i = 0; i < 24; ++i)
+        script.push_back({{FakeBlock::tool("glob", {{"pattern", "*.nothing"}})}, "tool_use"});
+    FakeLlm llm(f.cfg, std::move(script));
+
+    std::atomic<int> arrived{0};
+    std::atomic<int> overlapped{0};
+    f.ctx.spawn = [&](std::string_view type, std::string_view prompt) {
+        // ⚠️ 两个子 agent 在调用 LLM 之前互相等。FakeLlm 快到微秒级，不等的话
+        //    第一个可能在第二个启动之前就结束了 —— 调度器账面上是并发的，
+        //    共享的 client 实际上从来没被两个线程同时碰过。
+        ++arrived;
+        const auto deadline = std::chrono::steady_clock::now() + 2s;
+        while (arrived.load() < 2 && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(1ms);
+        if (arrived.load() >= 2) ++overlapped;   // 等到了对方，而不是等到超时
+        // 真的 spawn_subagent，两个子 agent 共用同一个 llm、同一个 sandbox ——
+        // 和 App 里 task_graph 的接线一模一样。
+        return spawn_subagent(f.cfg, llm, *f.sandbox, f.ctx, type, prompt);
+    };
+
+    const auto t = make_task_graph_tool();
+    Json args{{"tasks", Json::array({
+        Json{{"id", "a"}, {"prompt", "查 A"}, {"agent_type", "explorer"}},
+        Json{{"id", "b"}, {"prompt", "查 B"}, {"agent_type", "explorer"}},
+    })}};
+    const auto r = t->run(args, f.ctx);
+
+    CHECK(!r.is_error);
+    CHECK(r.metadata.at("done") == 2);
+    // ⚠️ 这条保证下面两条有意义：如果两个子 agent 从没同时在跑，
+    //    "共用一个 client 没出事"证明不了任何东西。
+    CHECK_MSG(overlapped == 2, "两个互不依赖的子 agent 要真的同时在跑");
+    // 24 条工具调用 + 两个子 agent 各一次兜底收尾 = 26。少一条就是并发时
+    // calls_ 丢了记录 —— 没加锁的 vector 被两个线程同时 push_back 就会这样。
+    CHECK_MSG(llm.calls().size() == 26, "每一次调用都要被记下来，一次不少");
+    CHECK(llm.usage().requests == 26);
+    //
+    // 这条用例真正的检查在 ThreadSanitizer 下：两个线程同时进 FakeLlm::complete，
+    // 没加锁的话 TSan 会报 script_ / calls_ / usage_ 上的竞态。普通构建里它只能
+    // 证明「同时在跑，而且结果都对」。
 }
 
 TEST(a_cyclic_graph_is_refused_before_running) {

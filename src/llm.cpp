@@ -35,6 +35,8 @@
 #include <curl/curl.h>
 #endif
 
+#include <mutex>
+
 namespace mini {
 
 /// @brief Accumulate one response's `usage` object into the running totals.
@@ -97,15 +99,43 @@ std::string Usage::summary() const {
 }
 
 // --- AnthropicClient -------------------------------------------------------
+/// @brief The part of AnthropicClient that is shared across calls: one lock.
+///
+/// ⚠️ 以前这里装着一整次请求的状态（curl handle、响应体、SSE 缓冲、半成品块），
+///    整个会话共用一份，每次 complete() 开头 reset。task_graph 让多个子 agent
+///    **同时**用同一个 client，于是一个请求正往 body 里写，另一个请求的 reset
+///    把它清空；同一个 curl handle 还被两个线程同时 perform —— libcurl 明确禁止。
+///    那些状态现在搬进每次调用自己的 Exchange，这里只剩真正跨调用共享的东西。
+///
+/// @note usage_ 本身在头文件的类里（它是 I4 的主角），锁放在这里是为了不让
+///       llm.hpp 的每个包含者都看到 <mutex> 的实现细节 —— pimpl 的老理由。
+/// @note 在 const 的 usage() 里给这把锁上锁能编译通过，是因为 impl_ 是指针，
+///       const 传不过去。这里是「逻辑上的 const」，是有意的；但编译器并没有
+///       在检查它。
+struct AnthropicClient::Impl {
+    std::mutex usage_mu;   ///< 保护 AnthropicClient::usage_ 的累加和快照
+};
+
+/// @brief A snapshot of the running totals.
+/// @return A copy taken under the lock. Not a reference: a reference handed out
+///         would be read after the lock is released, while another thread adds.
+Usage AnthropicClient::usage() const {
+    std::lock_guard lock(impl_->usage_mu);
+    return usage_;
+}
+
 #if MINI_AGENT_HAVE_CURL
 
-/// @brief Implementation details of AnthropicClient (pimpl).
+namespace {
+
+/// @brief One request's worth of state — response body, SSE buffer, blocks being
+///        assembled. Lives on the stack of a single complete() call.
 ///
-/// Kept in the .cpp so `curl.h` — which drags in a large pile of macros — never
-/// reaches a translation unit that merely includes llm.hpp. The price is that
-/// the destructor must be defined here too (see ~AnthropicClient).
+/// Nothing in here is shared with any other call, so two requests running at
+/// once cannot see each other's bytes and no lock is needed.
 ///
-/// Doubles as the streaming state machine: the SSE callback feeds bytes in,
+///
+/// It is also the streaming state machine: the SSE callback feeds bytes in,
 /// each event mutates these fields, and by the end of the request `blocks`,
 /// `stop_reason`, `model` and `usage` hold the complete response.
 ///
@@ -121,7 +151,7 @@ std::string Usage::summary() const {
 /// //   content_block_stop   → blocks += TextBlock{"Hi"}
 /// //   message_delta        → stop_reason="end_turn", usage.output_tokens=42
 /// @endcode
-struct AnthropicClient::Impl {
+struct Exchange {
     /// @brief A content block still being assembled from streamed deltas.
     ///
     /// The server pushes increments per block index, and one response may carry
@@ -150,7 +180,6 @@ struct AnthropicClient::Impl {
         std::string data;          // redacted_thinking
     };
 
-    CURL* handle = nullptr;          // 复用同一个 handle：连接、TLS 握手都能复用
     std::string body;                // 完整响应体：非流式用来解析，流式用来看错误原文
     const LlmRequest* req = nullptr; // 流式回调要用到 on_text / on_thinking
     std::string sse_buf;             // ⚠️ 一次写回调不保证是完整一行，自己缓冲
@@ -165,17 +194,17 @@ struct AnthropicClient::Impl {
     /// @param p    Start of this chunk.
     /// @param sz   Element size; always 1 for libcurl.
     /// @param n    Element count, i.e. the byte count.
-    /// @param self The Impl* handed over through CURLOPT_WRITEDATA.
+    /// @param self The Exchange* handed over through CURLOPT_WRITEDATA.
     /// @return Bytes consumed. Returning anything other than `sz * n` tells
     ///         libcurl the write failed and aborts the transfer.
     ///
     /// @code
-    /// curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, &Impl::write_plain);
-    /// curl_easy_setopt(h, CURLOPT_WRITEDATA, impl_.get());   // becomes `self`
-    /// // afterwards impl_->body holds the whole JSON response
+    /// curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, &Exchange::write_plain);
+    /// curl_easy_setopt(h, CURLOPT_WRITEDATA, &ex);   // becomes `self`
+    /// // afterwards ex.body holds the whole JSON response
     /// @endcode
     static std::size_t write_plain(char* p, std::size_t sz, std::size_t n, void* self) {
-        static_cast<Impl*>(self)->body.append(p, sz * n);
+        static_cast<Exchange*>(self)->body.append(p, sz * n);
         return sz * n;
     }
 
@@ -185,7 +214,7 @@ struct AnthropicClient::Impl {
     /// @param p    Start of this chunk.
     /// @param sz   Element size; always 1 for libcurl.
     /// @param n    Element count, i.e. the byte count.
-    /// @param self The Impl* handed over through CURLOPT_WRITEDATA.
+    /// @param self The Exchange* handed over through CURLOPT_WRITEDATA.
     /// @return Bytes consumed.
     ///
     /// @warning Chunk boundaries are entirely outside our control — they follow
@@ -220,7 +249,7 @@ struct AnthropicClient::Impl {
     /// // UTF-8 sequence, so the halves rejoin in the buffer untouched.
     /// @endcode
     static std::size_t write_sse(char* p, std::size_t sz, std::size_t n, void* self) {
-        auto* impl = static_cast<Impl*>(self);
+        auto* impl = static_cast<Exchange*>(self);
         const std::size_t total = sz * n;
         impl->body.append(p, total);        // 出错时服务端发的是普通 JSON，留着看原文
         impl->sse_buf.append(p, total);
@@ -364,51 +393,47 @@ struct AnthropicClient::Impl {
         partials.erase(it);
     }
 
-    /// @brief Clear state left over from the previous request.
-    ///
-    /// @param r The request being started; the SSE callbacks read `on_text` and
-    ///        `on_thinking` from it.
-    ///
-    /// @note One Impl serves every request of a session. Without this the blocks
-    ///       of the previous turn would leak into the next one.
-    void reset(const LlmRequest* r) {
-        body.clear(); sse_buf.clear();
-        partials.clear(); blocks.clear();
-        stop_reason.clear(); model.clear();
-        usage = Json::object();
-        req = r;
-    }
 };
 
-/// @brief Create the reusable curl handle.
+/// @brief A curl easy handle that cleans itself up, one per call.
+struct CurlHandle {
+    CURL* h = curl_easy_init();
+    CurlHandle() = default;
+    CurlHandle(const CurlHandle&) = delete;
+    CurlHandle& operator=(const CurlHandle&) = delete;
+    ~CurlHandle() { if (h) curl_easy_cleanup(h); }
+};
+
+}  // namespace
+
+/// @brief Initialise libcurl once, on the thread that builds the client.
 ///
 /// @param cfg Configuration reference. ⚠️ It must outlive this client — only a
 ///        reference is stored, nothing is copied.
 ///
-/// @note One handle serves the whole session so the connection and the TLS
-///       handshake are reused. A fresh handle per request would renegotiate
-///       TLS on every turn.
+/// @note curl_global_init is called here rather than left to the first
+///       curl_easy_init. Handles are now created per call, possibly on several
+///       worker threads at once, and before libcurl 7.84 the implicit global
+///       init was not thread-safe. Doing it once up front does not depend on
+///       the installed version.
 AnthropicClient::AnthropicClient(const Config& cfg)
     : cfg_(cfg), impl_(std::make_unique<Impl>()) {
-    impl_->handle = curl_easy_init();
+    curl_global_init(CURL_GLOBAL_DEFAULT);
 }
 
-/// @brief Release the curl handle.
+/// @brief Balance the curl_global_init in the constructor.
 ///
-/// @note Has to be defined here rather than `= default` in the header:
-///       destroying `unique_ptr<Impl>` needs Impl's complete definition, and the
-///       header only forward-declares it. This is the standing cost of pimpl.
-AnthropicClient::~AnthropicClient() {
-    if (impl_ && impl_->handle) curl_easy_cleanup(impl_->handle);
-}
+/// @note Defined here rather than `= default` in the header: destroying
+///       `unique_ptr<Impl>` needs Impl's complete definition, and the header
+///       only forward-declares it. This is the standing cost of pimpl.
+AnthropicClient::~AnthropicClient() { curl_global_cleanup(); }
 
 #else   // 没装 libcurl：能编译、能构造，一调用就明确报错
 
 /// @brief Empty stand-in when libcurl is absent, so the pimpl type has a definition.
-struct AnthropicClient::Impl {};
-
 /// @brief Constructible without libcurl — the failure is deferred to the call.
-AnthropicClient::AnthropicClient(const Config& cfg) : cfg_(cfg), impl_(nullptr) {}
+AnthropicClient::AnthropicClient(const Config& cfg)
+    : cfg_(cfg), impl_(std::make_unique<Impl>()) {}
 
 /// @brief No handle to release, but still defined in the .cpp: destroying
 ///        `unique_ptr<Impl>` needs Impl's complete definition.
@@ -539,9 +564,6 @@ Json AnthropicClient::build_body(const Config& cfg, const LlmRequest& req, bool 
 /// }
 /// @endcode
 std::expected<LlmResponse, LlmError> AnthropicClient::complete(const LlmRequest& req) {
-    if (!impl_ || !impl_->handle)
-        return std::unexpected(LlmError{0, "init_error", "curl 初始化失败"});
-
     const char* key = std::getenv("ANTHROPIC_API_KEY");
     if (!key || !*key)
         return std::unexpected(LlmError{0, "auth_error", "未设置 ANTHROPIC_API_KEY"});
@@ -550,23 +572,33 @@ std::expected<LlmResponse, LlmError> AnthropicClient::complete(const LlmRequest&
     const bool stream = cfg_.stream && (req.on_text || req.on_thinking);
     const std::string payload = build_body(cfg_, req, stream).dump();
 
-    impl_->reset(&req);
+    // ⚠️ 这一次调用的全部状态：自己的 curl handle、自己的 Exchange。
+    //    task_graph 里可能有好几个子 agent 正在同时调用这个 client。
+    //    代价是连接不再跨调用复用，每次多一次 TLS 握手 —— 相对一次动辄几秒的
+    //    模型调用可以忽略。真要复用，libcurl 的 share 接口（CURLSH 共享连接
+    //    缓存，带加锁回调）是正路，而不是退回共用一个 handle。
+    const CurlHandle handle;
+    if (!handle.h) return std::unexpected(LlmError{0, "init_error", "curl 初始化失败"});
+    Exchange ex;
+    ex.req = &req;
 
     curl_slist* headers = nullptr;
     headers = curl_slist_append(headers, (std::string("x-api-key: ") + key).c_str());
     headers = curl_slist_append(headers, "anthropic-version: 2023-06-01");
     headers = curl_slist_append(headers, "content-type: application/json");
 
-    CURL* h = impl_->handle;
-    curl_easy_reset(h);
+    CURL* h = handle.h;
     curl_easy_setopt(h, CURLOPT_URL, "https://api.anthropic.com/v1/messages");
     curl_easy_setopt(h, CURLOPT_POST, 1L);
     curl_easy_setopt(h, CURLOPT_POSTFIELDS, payload.c_str());
     curl_easy_setopt(h, CURLOPT_POSTFIELDSIZE, static_cast<long>(payload.size()));
     curl_easy_setopt(h, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, stream ? &Impl::write_sse : &Impl::write_plain);
-    curl_easy_setopt(h, CURLOPT_WRITEDATA, impl_.get());
+    curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, stream ? &Exchange::write_sse : &Exchange::write_plain);
+    curl_easy_setopt(h, CURLOPT_WRITEDATA, &ex);
     curl_easy_setopt(h, CURLOPT_TIMEOUT, 600L);
+    // ⚠️ 多线程下必须关掉信号：libcurl 默认用 SIGALRM 实现 DNS 超时，
+    //    而信号送达哪个线程是不确定的。
+    curl_easy_setopt(h, CURLOPT_NOSIGNAL, 1L);
 
     const CURLcode rc = curl_easy_perform(h);
     long status = 0;
@@ -577,11 +609,11 @@ std::expected<LlmResponse, LlmError> AnthropicClient::complete(const LlmRequest&
     if (rc != CURLE_OK)
         return std::unexpected(LlmError{0, "network_error", curl_easy_strerror(rc)});
 
-    const Json j = Json::parse(impl_->body, nullptr, /*allow_exceptions=*/false);
+    const Json j = Json::parse(ex.body, nullptr, /*allow_exceptions=*/false);
 
     if (status < 200 || status >= 300) {
         // 429/529 要能被上层识别出来重试，所以 type 必须原样带出去
-        std::string type = "http_error", msg = impl_->body.substr(0, 500);
+        std::string type = "http_error", msg = ex.body.substr(0, 500);
         if (j.is_object() && j.contains("error")) {
             type = j["error"].value("type", type);
             msg = j["error"].value("message", msg);
@@ -590,15 +622,16 @@ std::expected<LlmResponse, LlmError> AnthropicClient::complete(const LlmRequest&
     }
 
     LlmResponse out;
+    Json this_usage;
     if (stream) {
-        // 流式：响应体是一串 SSE 事件，内容已经在回调里攒进 impl_ 了
-        if (impl_->blocks.empty() && impl_->stop_reason.empty())
+        // 流式：响应体是一串 SSE 事件，内容已经在回调里攒进 ex 了
+        if (ex.blocks.empty() && ex.stop_reason.empty())
             return std::unexpected(
                 LlmError{static_cast<int>(status), "parse_error", "流式响应没有任何内容"});
-        out.model = std::move(impl_->model);
-        out.stop_reason = std::move(impl_->stop_reason);
-        out.content = std::move(impl_->blocks);
-        usage_.add(impl_->usage);
+        out.model = std::move(ex.model);
+        out.stop_reason = std::move(ex.stop_reason);
+        out.content = std::move(ex.blocks);
+        this_usage = std::move(ex.usage);
     } else {
         if (!j.is_object())
             return std::unexpected(
@@ -608,9 +641,16 @@ std::expected<LlmResponse, LlmError> AnthropicClient::complete(const LlmRequest&
         // ⚠️ 原样保留所有块 —— thinking 的 signature 也在里面，下一轮 API 会校验它
         for (const auto& b : j.value("content", Json::array()))
             if (auto blk = block_from_json(b)) out.content.push_back(std::move(*blk));
-        usage_.add(j.value("usage", Json::object()));
+        this_usage = j.value("usage", Json::object());
     }
-    out.usage = usage_;
+
+    // ⚠️ 累加和取快照必须在**同一次**加锁里。分成两次的话，中间另一个线程的
+    //    add 会混进这次返回的快照 —— 数字对不上，而且没有任何报错。
+    {
+        std::lock_guard lock(impl_->usage_mu);
+        usage_.add(this_usage);
+        out.usage = usage_;
+    }
     return out;
 }
 
@@ -711,7 +751,15 @@ FakeLlm::FakeLlm(const Config& cfg, std::vector<Turn> script)
 void FakeLlm::push_front(Turn turn) {
     // 子 agent 的响应要插在父 agent 剧本的**中间**：父 agent 跑到一半发起
     // spawn，那时父的剧本已经消耗了几条，子 agent 要的是"下一条"。
+    std::lock_guard lock(mu_);
     script_.insert(script_.begin(), std::move(turn));
+}
+
+/// @brief A snapshot of the running totals, taken under the lock.
+/// @return A copy; see AnthropicClient::usage() for why not a reference.
+Usage FakeLlm::usage() const {
+    std::lock_guard lock(mu_);
+    return usage_;
 }
 
 /// @brief Pop the next turn from the script and translate it into an LlmResponse.
@@ -743,6 +791,11 @@ std::expected<LlmResponse, LlmError> FakeLlm::complete(const LlmRequest& req) {
     //   * 从 script_ 弹一条，转成 ContentBlock；tool_use 要生成唯一 id
     //   * **只在 cfg_.stream 为真时**调 on_text，否则 loop 会重复输出
     //   * 剧本用完返回一条兜底文本，别抛异常
+
+    // ⚠️ 整个调用在一把锁里。task_graph 的测试让几个子 agent 同时用同一个 FakeLlm，
+    //    而剧本、calls_、usage_、counter_ 全是共享的。锁住整段，剧本才是一条一条
+    //    被弹出去的 —— 不过**哪个子 agent 拿到哪一条**不确定，并发测试别依赖它。
+    std::lock_guard lock(mu_);
 
     // 三样都要记：system_prompt_is_byte_stable / has_no_timestamp 这类测试要断言它。
     Json sys = Json::array();

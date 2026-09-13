@@ -103,7 +103,10 @@
 //     cfg_     协作者，引用。只用来取 model / max_tokens / effort / stream
 //              → 没有不变量，只有生命周期这条前置条件（见文末）
 //     usage_   状态                                              → I4
-//     impl_    状态：curl handle + SSE 缓冲 + 半成品的块          → I5
+//     impl_    一把锁，保护 usage_                               → I4
+//
+//   请求本身的状态（curl handle、响应体、SSE 缓冲、半成品的块）**不是字段**：
+//   它是 complete() 栈上的一个 Exchange，一次调用一份               → I5
 //
 // ── 谁保证什么 ──────────────────────────────────────────────────────────────
 //
@@ -123,20 +126,26 @@
 //   ┌── I4  usage_ 是**至今所有调用**的累加，不是最近一次的 ─────────────┐
 //   │ 违反 → /usage 显示的是最后一轮的数字，缓存命中率无从判断。           │
 //   │ 维护者：complete() 用 usage_.add()，两条路径（流式/非流式）各一次。 │
+//   │ 并发：add 和取快照在**同一次**加锁里完成。分成两次，中间另一个线程  │
+//   │      的 add 就会混进这次返回的快照。usage() 因此按值返回。           │
 //   │ 注意返回的 LlmResponse.usage 是**累计值**的快照，不是本次增量 ——    │
 //   │      因为调用方要的是"到目前为止花了多少"。                         │
 //   └────────────────────────────────────────────────────────────────────┘
-//   ┌── I5  impl_ 不跨调用携带状态 ──────────────────────────────────────┐
-//   │ 违反 → 上一次响应的半成品块混进这一次。流式尤其危险：一个没收到     │
-//   │        content_block_stop 的 partial 会一直留着，下一次响应的       │
-//   │        同 index 事件往它上面追加 —— 拼出一个两次响应混合的块。      │
-//   │ 维护者：complete() 开头的 impl_->reset(&req)，清 body / sse_buf /   │
-//   │        partials / blocks / stop_reason / model / usage。            │
-//   │ 唯一**不清**的是 handle —— 有意复用，省掉每次的连接和 TLS 握手。    │
+//   ┌── I5  一次请求的状态只属于这一次调用 ──────────────────────────────┐
+//   │ 违反 → 两种情况都会混响应：                                        │
+//   │   串行：上一次没收到 content_block_stop 的半成品块留下来，下一次    │
+//   │        同 index 的事件往它上面追加。                                │
+//   │   并发：task_graph 的几个子 agent 同时调用，一个请求往响应体里写，  │
+//   │        另一个把它清空；同一个 curl handle 被两个线程同时 perform。   │
+//   │ 维护者：**结构**。Exchange 和 curl handle 都是 complete() 的局部   │
+//   │        变量，不存在可以忘了清、或者可以被别人碰到的共享副本。        │
+//   │ 以前靠 complete() 开头的 reset() 维护串行的那一半，并发的那一半     │
+//   │        它维护不了 —— reset 本身就是那个把别人数据清空的调用。        │
 //   └────────────────────────────────────────────────────────────────────┘
 //
 // FakeLlm 那边只有一条：script_ 每调用一次少一个，calls_ 每调用一次多一条，
-// 所以 calls_.at(i) 就是"第 i 轮发出去的东西"。测试断言的是**请求**而不是响应
+// 所以 calls_.at(i) 就是"第 i 轮发出去的东西"。整个 complete() 在 mu_ 里，
+// 所以并发调用时这条仍然成立 —— 但 i 对应哪个子 agent 就不确定了。测试断言的是**请求**而不是响应
 // 时靠的就是它 —— system 的字节稳定性、tools 有没有排序、压缩指令问没问对。
 //
 // ⚠️ 这一层**不认识 agent 概念** —— 不知道什么是工具循环、什么是步数上限，
@@ -148,6 +157,7 @@
 //
 #include <expected>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -260,8 +270,9 @@ struct LlmRequest {
 /// @note Knows nothing about agents — no tool loop, no steps. It sends a
 ///       request and returns a response.
 /// @warning The destructor is virtual because AnthropicClient is deleted
-///          through this pointer. Without it, the pimpl and the curl handle
-///          leak on every session.
+///          through this pointer. Without it, AnthropicClient's destructor
+///          never runs — its pimpl leaks, and curl_global_cleanup is never
+///          called.
 class LlmClient {
   public:
     virtual ~LlmClient() = default;
@@ -274,11 +285,17 @@ class LlmClient {
     /// @warning **Failure is a value, not an exception.** 429 and 529 are
     ///          retryable and a network blip is routine; throwing would end
     ///          the agent loop over something the caller could have handled.
+    /// @warning ⚠️ **May be called from several threads at once.** task_graph
+    ///          runs sub-agents in parallel, and they all share the App's one
+    ///          client. An implementation that keeps per-request state in a
+    ///          member mixes up concurrent responses.
     virtual std::expected<LlmResponse, LlmError> complete(const LlmRequest& req) = 0;
 
     /// @brief Running totals for this client.
-    /// @return Token counts accumulated across every call.
-    virtual const Usage& usage() const = 0;
+    /// @return A snapshot of the token counts accumulated across every call.
+    /// @note By value, not by reference: a reference would be read after the
+    ///       implementation's lock is released, while another thread adds.
+    virtual Usage usage() const = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -289,9 +306,11 @@ class LlmClient {
 ///   - 非流式：POST → 解析 JSON → LlmResponse
 ///   - 流式：SSE 回调里逐行解析，最后拼出完整响应
 ///
-/// libcurl 的坑：写回调是 C 函数指针，要把 this 通过 userdata 传进去：
+/// libcurl 的坑：写回调是 C 函数指针，状态要通过 userdata 传进去：
 ///   static size_t on_write(char* p, size_t n, size_t m, void* self)
-///       { return static_cast<Impl*>(self)->consume({p, n*m}); }
+///       { return static_cast<Exchange*>(self)->consume({p, n*m}); }
+/// ⚠️ 传进去的是**这一次调用**的状态，不是 this —— 同一个 client 会被几个
+///    子 agent 同时调用。
 /// SSE 的坑：一次回调不保证是完整一行，必须自己缓冲、按 '\n' 切。
 // ---------------------------------------------------------------------------
 class AnthropicClient final : public LlmClient {
@@ -306,8 +325,8 @@ class AnthropicClient final : public LlmClient {
     std::expected<LlmResponse, LlmError> complete(const LlmRequest& req) override;
 
     /// @brief Running totals for this client.
-    /// @return Token counts accumulated across every call.
-    const Usage& usage() const override { return usage_; }
+    /// @return A snapshot taken under the lock that also guards the additions.
+    Usage usage() const override;
 
     /// @brief Render a request into the JSON body.
     ///
@@ -324,7 +343,7 @@ class AnthropicClient final : public LlmClient {
   private:
     const Config& cfg_;
     Usage usage_;
-    struct Impl;                 // pimpl：把 curl.h 关在 .cpp 里，别污染头文件
+    struct Impl;                 // pimpl：只有一把保护 usage_ 的锁
     std::unique_ptr<Impl> impl_;
 };
 
@@ -386,7 +405,7 @@ class FakeLlm final : public LlmClient {
 
     /// @brief Running totals; requests are counted, tokens are not simulated.
     /// @return The accumulated usage.
-    const Usage& usage() const override { return usage_; }
+    Usage usage() const override;
 
     /// @brief Everything that was sent, one entry per call.
     /// @return system, messages and tools as they went out.
@@ -406,6 +425,7 @@ class FakeLlm final : public LlmClient {
     std::vector<Turn> script_;
     std::vector<Json> calls_;
     Usage usage_;
+    mutable std::mutex mu_;       // complete() 可能被几个子 agent 同时调用
     int counter_ = 0;             // 生成唯一的 tool_use id
 };
 

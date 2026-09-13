@@ -94,7 +94,7 @@ struct FailingLlm final : LlmClient {
         ++calls;
         return std::unexpected(LlmError{529, "overloaded_error", "服务过载"});
     }
-    const Usage& usage() const override { return usage_; }
+    Usage usage() const override { return usage_; }
     Usage usage_;
 };
 
