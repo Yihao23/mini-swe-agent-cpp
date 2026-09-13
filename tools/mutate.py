@@ -1035,6 +1035,10 @@ MUTANTS = [
         binaries=["test_mcp"],
         expect=["closing_while_another_thread_is_calling_neither_crashes_nor_hangs"],
         note="正在 read() 的请求线程脚下的 fd 被关掉、再被下一个 open() 复用 —— 读到别的文件",
+        known_gap="只有 ThreadSanitizer 看得见：去掉这把锁后在 build-tsan 里连跑三次，三次都报"
+                  " shutdown() 关写端和关读端时的数据竞争（实测）。普通构建里 fd 被复用需要"
+                  "另一个线程恰好在那一刻 open()，这条用例里没有这样的线程，所以它照样通过。"
+                  "mutate.py 只跑普通构建",
     ),
     # ── Stage 4：计划清单 ───────────────────────────────────────────────────
     dict(
