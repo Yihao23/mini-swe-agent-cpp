@@ -287,4 +287,35 @@ TEST(a_server_entry_without_a_command_is_a_warning) {
     CHECK(has(r.errors[0], "oops"));
 }
 
+// ── 按 server 写权限规则 ────────────────────────────────────────────────────
+
+TEST(a_deny_rule_on_the_server_prefix_blocks_its_remote_tools) {
+    Fixture f;
+    const auto r = load_mcp_servers(f.mock_config(), f.root);
+    CHECK(r.tools.size() == 1);
+    const auto& tool = *r.tools[0];
+
+    auto make_cfg = [&](std::vector<std::string> deny) {
+        Config cfg;
+        cfg.workdir = f.root;
+        cfg.permission_mode = PermissionMode::Yolo;   // 没有规则命中就放行
+        cfg.deny_rules = std::move(deny);
+        cfg.normalize();
+        return cfg;
+    };
+
+    // 反面对照：没有规则时 yolo 放行。否则下面的 Deny 可能根本不是规则造成的。
+    const Config open = make_cfg({});
+    Sandbox open_sb(open);
+    CHECK(open_sb.authorize(tool, Json{{"text", "hi"}}).action == Action::Allow);
+
+    // ⚠️ 前缀之所以存在，就是为了能按 server 写规则。以前 Rule::matches 对工具名
+    //    逐字符比较，这条规则解析成功、不报任何警告，然后什么都拦不住。
+    const Config closed = make_cfg({"Mcp__mock__*"});
+    Sandbox closed_sb(closed);
+    CHECK(closed_sb.warnings().empty());
+    CHECK_MSG(closed_sb.authorize(tool, Json{{"text", "hi"}}).action == Action::Deny,
+              "deny Mcp__mock__* 要真的拦住 mock 这个 server 的工具");
+}
+
 int main() { return mt::run_all(); }

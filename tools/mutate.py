@@ -834,6 +834,49 @@ MUTANTS = [
         note="模型可以自己解除超时限制",
     ),
 
+    # ── Stage 7：规则匹配 —— 工具名是 glob，记住的批准是字面量 ──────────────
+    dict(
+        name="工具名退回逐字符比较",
+        file="src/sandbox.cpp",
+        edits=[('    if (::fnmatch(tool.c_str(), std::string(tool_name).c_str(), FNM_CASEFOLD) != 0) return false;', '    if (tool.size() != tool_name.size()) return false;\n    for (std::size_t i = 0; i < tool.size(); ++i)\n        if (std::tolower(static_cast<unsigned char>(tool[i])) !=\n            std::tolower(static_cast<unsigned char>(tool_name[i])))\n            return false;')],
+        binaries=["test_rule_matching", "test_mcp"],
+        expect=["a_server_prefix_rule_covers_that_servers_tools",
+                "a_deny_rule_on_the_server_prefix_blocks_its_remote_tools"],
+        note="deny Mcp__github__* 解析成功、不报任何警告，然后什么都拦不住",
+    ),
+    dict(
+        name="工具名按前缀匹配",
+        file="src/sandbox.cpp",
+        edits=[('    if (::fnmatch(tool.c_str(), std::string(tool_name).c_str(), FNM_CASEFOLD) != 0) return false;', '    if (tool_name.size() < tool.size()) return false;\n    for (std::size_t i = 0; i < tool.size(); ++i)\n        if (std::tolower(static_cast<unsigned char>(tool[i])) !=\n            std::tolower(static_cast<unsigned char>(tool_name[i])))\n            return false;')],
+        binaries=["test_rule_matching"],
+        expect=["a_name_without_wildcards_still_matches_only_itself"],
+        note="改过头的那个方向：deny Bash 连带禁掉 bash_output，deny task 禁掉 task_graph",
+    ),
+    dict(
+        name="工具名匹配区分大小写",
+        file="src/sandbox.cpp",
+        edits=[('    if (::fnmatch(tool.c_str(), std::string(tool_name).c_str(), FNM_CASEFOLD) != 0) return false;', '    if (::fnmatch(tool.c_str(), std::string(tool_name).c_str(), 0) != 0) return false;')],
+        binaries=["test_rule_matching"],
+        expect=["tool_names_ignore_case_but_subjects_do_not"],
+        note="配置里写 Bash，Tool::name() 返回 bash —— 所有照文档写的规则全部失效",
+    ),
+    dict(
+        name="记住批准时 subject 不转义",
+        file="src/sandbox.cpp",
+        edits=[('    Rule r{glob_literal(rule_name), glob_literal(subject)};', '    Rule r{glob_literal(rule_name), std::string(subject)};')],
+        binaries=["test_rule_matching"],
+        expect=["always_allowing_a_command_with_a_star_does_not_allow_other_paths"],
+        note="批准一次 rm build/*.o，rm build/../../home/secret.o 从此不再询问。"
+             "这是修复前的原样代码",
+    ),
+    dict(
+        name="记住批准时工具名不转义",
+        file="src/sandbox.cpp",
+        edits=[('    Rule r{glob_literal(rule_name), glob_literal(subject)};', '    Rule r{std::string(rule_name), glob_literal(subject)};')],
+        binaries=["test_rule_matching"],
+        expect=["always_allowing_a_tool_whose_name_has_a_star_does_not_allow_its_neighbours"],
+        note="工具名变成 glob 之后才有的新坑：记住一个名字带 * 的 MCP 工具，等于放行一片",
+    ),
     # ── Stage 7：写错的权限规则 ─────────────────────────────────────────────
     dict(
         name="解析失败的规则静默跳过，不留警告",

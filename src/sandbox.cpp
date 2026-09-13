@@ -29,6 +29,27 @@ const std::vector<DangerPattern> kDangerous = {
     {R"(\bgit\s+push\b.*(--force|-f)\b)", "强制推送"},
 };
 
+namespace {
+
+/// 把一段字面文本变成只匹配它自己的 glob：给 * ? [ \ 前面加反斜杠。
+///
+/// fnmatch 不带 FNM_NOESCAPE 时反斜杠是转义符，所以这四个就是全部需要处理的。
+/// `]` 只在方括号里才有意义，`[` 转义之后它就只是普通字符。
+///
+///   glob_literal("npm test")      → "npm test"
+///   glob_literal("rm build/*.o")  → "rm build/\\*.o"
+std::string glob_literal(std::string_view text) {
+    std::string out;
+    out.reserve(text.size());
+    for (const char c : text) {
+        if (c == '*' || c == '?' || c == '[' || c == '\\') out += '\\';
+        out += c;
+    }
+    return out;
+}
+
+}  // namespace
+
 /// 警告里给的"正确写法"示范。三种形式各举一例，照着改就行。
 constexpr const char* kRuleForms = "Bash / Write(src/**) / Bash(git status:*)";
 
@@ -54,12 +75,13 @@ std::optional<Rule> Rule::parse(std::string_view text) {
 }
 
 bool Rule::matches(std::string_view tool_name, std::string_view subject) const {
-    // 配置里写 "Bash"，Tool::name() 返回 "bash" —— 工具名大小写不敏感
-    if (tool.size() != tool_name.size()) return false;
-    for (std::size_t i = 0; i < tool.size(); ++i)
-        if (std::tolower(static_cast<unsigned char>(tool[i])) !=
-            std::tolower(static_cast<unsigned char>(tool_name[i])))
-            return false;
+    // 工具名也是 glob，而且大小写不敏感：
+    //   * 配置里写 "Bash"，Tool::name() 返回 "bash"
+    //   * `Mcp__github__*` 要能盖住一个 server 的全部工具 —— MCP 工具名加前缀，
+    //     就是为了让规则能按 server 写。以前这里逐字符比较，那条规则什么都匹配
+    //     不到，而配置看起来完全正常。
+    // ⚠️ 不带通配符的名字仍然只匹配它自己：`Bash` 不会盖住 `bash_output`。
+    if (::fnmatch(tool.c_str(), std::string(tool_name).c_str(), FNM_CASEFOLD) != 0) return false;
 
     if (!pattern) return true;   // 没有 pattern = 整个工具都匹配
     // 不加 FNM_PATHNAME —— Write(src/**) 要能匹配 src/a/b.py，* 必须能跨 /
@@ -256,6 +278,10 @@ Decision Sandbox::confirm(std::string_view rule_name, std::string_view subject, 
 }
 
 void Sandbox::remember_allow(std::string_view rule_name, std::string_view subject) {
+    // ⚠️ 规则两边都是 glob，所以记住的东西必须先转义成字面量（glob_literal）。
+    //    不转义的话，用户对 `rm build/*.o` 答了「总是允许」，`*` 就真的成了通配符 ——
+    //    `rm build/../../home/secret.o` 从此不再询问。工具名同理：一个 MCP server
+    //    提供的工具名里带 `*`，记住它就等于放行一片。
     // 设计题（见 sandbox.hpp 里 remember_allow 的 @note）：
     // 批准了 `npm test`，下次 `npm test -- --watch` 算不算？
     //
@@ -263,7 +289,7 @@ void Sandbox::remember_allow(std::string_view rule_name, std::string_view subjec
     //   太宽（记成 `npm*`）→ 用户批准一次 npm test，等于放开了 npm publish
     //   太窄（现在这样）  → 参数变一个字就要再问一次
     // 宁可烦一点。想要更宽的授权，用户可以往 config 里写 allow 规则 —— 那是显式的。
-    Rule r{std::string(rule_name), std::string(subject)};
+    Rule r{glob_literal(rule_name), glob_literal(subject)};
     for (const auto& e : allow_)                       // 别重复堆积同一条
         if (e.tool == r.tool && e.pattern == r.pattern) return;
     allow_.push_back(std::move(r));

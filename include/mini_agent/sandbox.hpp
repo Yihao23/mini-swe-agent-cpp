@@ -150,11 +150,11 @@
 //   * subject() 得给对。它由每个工具各自实现，沙箱只拿得到那个字符串。
 //     所以 tool.hpp 上有那条 @warning，每个多字符串参数的工具都配了
 //     一条测试和一条变异守着。
-//   * I6 只抓**语法**错误。语法正确但永远匹配不到的规则照样静默失效：
-//       `Bsah(rm:*)`        工具名拼错 —— 沙箱不知道有哪些工具，无从判断
-//       `Mcp__github__*`    工具名里的 * 不是通配符 —— Rule::matches 对工具名
-//                           做的是逐字符比较，只有括号里的 pattern 走 fnmatch
-//     这两种都要知道工具表才查得出来，而工具表在 App 里、比沙箱建得晚。
+//   * I6 只抓**语法**错误。语法正确但永远匹配不到的规则照样静默失效，
+//     比如 `Bsah(rm:*)` —— 工具名拼错。要知道工具表才查得出来，而工具表在
+//     App 里、比沙箱建得晚。
+//   * 工具名本身带 glob 元字符（* ? [）时，想精确点名它的规则会被当成通配。
+//     内置工具名都没有；MCP 工具名来自第三方 server，这一层管不了。
 //
 #include <filesystem>
 #include <functional>
@@ -204,7 +204,7 @@ struct Decision {
 ///
 /// 一条权限规则：`Bash(git status:*)` / `Write(src/**)` / `Bash`
 struct Rule {
-    std::string tool;                     ///< Tool name; compared case-insensitively.
+    std::string tool;                     ///< Glob over the tool name, case-insensitive.
     std::optional<std::string> pattern;   ///< Glob over the subject; nullopt matches the whole tool.
 
     /// @brief Parse one rule string.
@@ -239,8 +239,14 @@ struct Rule {
     /// @param subject     What Tool::subject() returned for this call.
     /// @return true when the tool name matches and the glob accepts the subject.
     ///
-    /// @note Tool names compare case-insensitively: config files say `Bash`
-    ///       while Tool::name() returns `bash`.
+    /// @note The tool name is a glob too, matched case-insensitively. Config
+    ///       files say `Bash` while Tool::name() returns `bash`, and
+    ///       `Mcp__github__*` has to cover every tool one MCP server provides —
+    ///       that is what the `mcp__<server>__` prefix exists for. A name with
+    ///       no wildcard still matches only itself: `Bash` does not cover
+    ///       `bash_output`.
+    /// @note The subject stays case-sensitive: `Write(SRC/**)` does not cover
+    ///       `src/a.py`. Paths on Linux are case-sensitive, and so are commands.
     /// @note No pattern means the whole tool matches, whatever the subject.
     /// @note fnmatch is called without FNM_PATHNAME, so `*` crosses `/` —
     ///       Write(src/**) has to reach src/a/b.py, and with the flag set it
@@ -258,6 +264,11 @@ struct Rule {
     /// Rule::parse("Bash(git status:*)")->matches("bash", "git status -s") ==> true
     /// Rule::parse("Bash(git status:*)")->matches("bash", "git push")      ==> false
     /// Rule::parse("Bash")->matches("bash", "anything at all")             ==> true
+    /// Rule::parse("Bash")->matches("bash_output", "bg_1")                 ==> false
+    /// Rule::parse("Mcp__github__*")->matches("mcp__github__search", "q")  ==> true
+    /// Rule::parse("Mcp__github__*")->matches("mcp__slack__post", "q")     ==> false
+    /// Rule::parse("*")->matches("read", "any.txt")                        ==> true
+    /// Rule::parse("Write(SRC/**)")->matches("write", "src/a.py")          ==> false
     /// @endcode
     ///
     /// 工具名要对上，pattern 走 glob。
@@ -523,6 +534,11 @@ class Sandbox {
     ///       write an allow rule, which is explicit.
     /// @note Duplicates are skipped so the list does not grow on repeated
     ///       answers to the same question.
+    /// @warning ⚠️ Both halves are escaped before being stored, because a Rule
+    ///          treats both as globs. Stored raw, approving `rm build/*.o`
+    ///          once and for all would also approve
+    ///          `rm build/../../home/secret.o` without asking — the `*` in what
+    ///          the user approved becoming a wildcard they never saw.
     ///
     /// @code{.test}
     /// @setup Config cfg = doc_config(PermissionMode::Ask);
@@ -537,6 +553,10 @@ class Sandbox {
     /// asked                                                        ==> 2
     /// @setup sb.authorize(bash, Json{{"command","npm publish"}});
     /// asked                                                        ==> 3
+    /// @setup sb.authorize(bash, Json{{"command","rm build/*.o"}});
+    /// asked                                                        ==> 4
+    /// @setup sb.authorize(bash, Json{{"command","rm build/../../home/secret.o"}});
+    /// asked                                                        ==> 5
     /// @endcode
     ///
     /// 用户选了"以后都允许"。

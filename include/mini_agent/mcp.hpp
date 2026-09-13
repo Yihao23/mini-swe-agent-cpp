@@ -51,9 +51,9 @@
 //        │        │        │
 //        │        │        └── 起不来的 server 记在这，**不抛**。
 //        │        │            丢掉一个 server 的工具，好过整个 agent 起不来
-//        │        └── ⚠️ 必须留着！工具持有 client 的 shared_ptr，
-//        │            这个 vector 一丢，server 进程就没了，
-//        │            而工具还注册着 —— 下次调用写进一根已关闭的管道
+//        │        └── 一个工具都不提供的 server 靠它活着。
+//        │            有工具的 server 不靠它：每个工具自己持有 client 的
+//        │            shared_ptr，只要工具还在注册表里，server 就在
 //        └── 直接 registry.add() 就能用
 //
 //   模型调用一个远程工具：
@@ -75,7 +75,9 @@
 //     github server      也提供 read_file
 //         → mcp__filesystem__read_file / mcp__github__read_file
 //
-//   两个好处：不撞名；权限规则能精确到某一个 server —— `deny Mcp__github__*`。
+//   两个好处：不撞名；权限规则能按 server 写 —— deny 规则 `Mcp__github__*`
+//   盖住 github 这个 server 的全部工具。Rule::matches 对工具名也走 glob，
+//   这条规则才生效；以前是逐字符比较，它什么都匹配不到。
 //
 // ── 远程工具的两个标记都取保守值 ────────────────────────────────────────────
 //
@@ -84,11 +86,12 @@
 //
 //   代价是远程工具永远不并发、永远过闸。相比"它可能在删你的文件"，这不算什么。
 //
-// ── 一条这一层保证不了的 ────────────────────────────────────────────────────
+// ── 两条这一层保证不了的 ────────────────────────────────────────────────────
 //
-//   McpLoadResult::clients 得被调用方**存活着**。类型是 shared_ptr 已经在提示
-//   这件事，但没有任何东西能强制 —— 丢掉那个 vector 编译照过，运行到第一次
-//   远程调用才炸，而错误信息说的是管道。
+//   * server 实际做了什么。两个标记取保守值只决定"要不要问、能不能并发"，
+//     问过之后它删了什么，这一层看不见。
+//   * 工具名。它来自第三方 server，里面要是带 `*` `?` `[`，想精确点名它的
+//     权限规则会被当成通配。
 //
 #include <expected>
 #include <filesystem>
@@ -240,9 +243,12 @@ class McpClient {
 struct McpLoadResult {
     std::vector<ToolPtr> tools;   ///< Ready to register, names already prefixed.
 
-    /// @brief The clients, kept alive because the tools hold them.
-    /// @warning Dropping this vector destroys the servers while their tools are
-    ///          still registered, and the next call reaches a closed pipe.
+    /// @brief Every started server, including those that offer no tools.
+    /// @note A server with tools does not depend on this vector: each McpTool
+    ///       holds its client through a shared_ptr, so the server lives as
+    ///       long as any of its tools does. A server with no tools has nothing
+    ///       else holding it and would be shut down the moment loading ends.
+    ///       Keeping them here also leaves App one place to reach every server.
     std::vector<std::shared_ptr<McpClient>> clients;
 
     /// @brief Servers that would not start. Non-fatal; shown via App::warnings.
