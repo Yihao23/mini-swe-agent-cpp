@@ -5,6 +5,7 @@
 
 #include "mini_agent/sandbox.hpp"
 
+#include <format>
 #include <cctype>
 #include <fnmatch.h>
 #include <regex>
@@ -27,6 +28,9 @@ const std::vector<DangerPattern> kDangerous = {
     {R"(>\s*/dev/(sd|nvme|hd)\w*)", "写裸设备"},
     {R"(\bgit\s+push\b.*(--force|-f)\b)", "强制推送"},
 };
+
+/// 警告里给的"正确写法"示范。三种形式各举一例，照着改就行。
+constexpr const char* kRuleForms = "Bash / Write(src/**) / Bash(git status:*)";
 
 std::optional<Rule> Rule::parse(std::string_view text) {
     // 三种形式：Bash / Write(src/**) / Bash(git status:*)
@@ -64,16 +68,34 @@ bool Rule::matches(std::string_view tool_name, std::string_view subject) const {
 
 Sandbox::Sandbox(const Config& cfg, AskFn asker)
     : cfg_(cfg), mode_(cfg.permission_mode), asker_(std::move(asker)) {
-    // 解析失败的规则直接跳过 —— 一条写错的规则不该让整个 agent 起不来。
-    // TODO(Stage 7): 把跳过的规则收集成 warning，交给 App::warnings() 提示用户。
-    auto load = [](const std::vector<std::string>& texts, std::vector<Rule>& out) {
+    // 解析失败的规则跳过 —— 一条写错的规则不该让整个 agent 起不来。
+    //
+    // ⚠️ 但**不能静默跳过**（I6）。从外面看，一条悄悄消失的规则和一条正常
+    //    工作的规则长得一模一样：配置文件里明明写着，agent 也照常启动了。
+    //    每跳过一条就留一条警告，App 会把它们转交给 App::warnings()。
+    auto load = [this](const std::vector<std::string>& texts, std::vector<Rule>& out,
+                       bool is_deny) {
         out.reserve(texts.size());
-        for (const auto& t : texts)
-            if (auto r = Rule::parse(t)) out.push_back(std::move(*r));
+        for (const auto& t : texts) {
+            if (auto r = Rule::parse(t)) {
+                out.push_back(std::move(*r));
+                continue;
+            }
+            // ⚠️ deny 和 allow 的后果不对称，措辞也不能一样。
+            //    跳过一条 allow → 最坏是多问一句，按权限模式处理。
+            //    跳过一条 deny  → 用户以为被禁止的操作**没有被禁止**。
+            warnings_.push_back(
+                is_deny ? std::format("deny 规则 \"{}\" 写法不对，已忽略 —— 它想禁止的操作"
+                                      "现在没有被禁止。合法写法：{}", t, kRuleForms)
+                        : std::format("allow 规则 \"{}\" 写法不对，已忽略，相应操作按当前"
+                                      "权限模式处理。合法写法：{}", t, kRuleForms));
+        }
     };
-    load(cfg.allow_rules, allow_);
-    load(cfg.deny_rules, deny_);
+    load(cfg.allow_rules, allow_, false);
+    load(cfg.deny_rules, deny_, true);
 }
+
+const std::vector<std::string>& Sandbox::warnings() const { return warnings_; }
 
 Decision Sandbox::authorize(const Tool& tool, const Json& args) {
     const std::string subject = tool.subject(args);

@@ -97,7 +97,7 @@
 //      字符串前缀，但那是个兄弟目录。这条曾经有测试却测不出来 ——
 //      因为选的输入让两种实现给出相同答案。
 //
-// ── 五个字段，五条不变量 ────────────────────────────────────────────────────
+// ── 六个字段，六条不变量 ────────────────────────────────────────────────────
 //
 // 每个字段至少归属一条不变量 —— 否则它要么是没人维护的裸状态，
 // 要么根本不该是成员。左边是字段，右边是它参与的不变量：
@@ -107,6 +107,7 @@
 //     allow_   已解析的规则                                 → I4
 //     deny_    已解析的规则                                 → I3 I4
 //     asker_   怎么问人；空 = 非交互                         → I1
+//     warnings_ 解析失败、被跳过的规则                        → I6
 //
 //   ┌── I1  authorize() 的返回值永远不是 Ask ────────────────────────────┐
 //   │ 维护者：confirm()，它是 authorize() 的最后一步，把 Ask 落地成       │
@@ -133,6 +134,14 @@
 //   │ 注意这条不走 authorize() —— 路径类工具直接调 resolve_path，        │
 //   │      所以它和上面四条是两条并行的线，见前面那张图。                 │
 //   └────────────────────────────────────────────────────────────────────┘
+//   ┌── I6  配置里的每一条规则，要么生效，要么留下一条警告 ──────────────┐
+//   │ 对 cfg.allow_rules / cfg.deny_rules 里的每条文本 t：               │
+//   │     t 被解析进了 allow_ / deny_，或者 warnings_ 里有一条引用 t 的消息 │
+//   │ 违反 → 写错的 deny 规则静默消失。用户以为某操作被禁了，实际没有。  │
+//   │ 维护者：构造函数里的 load，它是唯一读配置规则的地方。              │
+//   │ 写成「要么…要么…」而不是数量相等：remember_allow() 运行时会往      │
+//   │      allow_ 里加，数量关系在第一次「总是允许」之后就不成立了。      │
+//   └────────────────────────────────────────────────────────────────────┘
 //
 // ── 两条这一层保证不了的 ────────────────────────────────────────────────────
 //
@@ -141,6 +150,11 @@
 //   * subject() 得给对。它由每个工具各自实现，沙箱只拿得到那个字符串。
 //     所以 tool.hpp 上有那条 @warning，每个多字符串参数的工具都配了
 //     一条测试和一条变异守着。
+//   * I6 只抓**语法**错误。语法正确但永远匹配不到的规则照样静默失效：
+//       `Bsah(rm:*)`        工具名拼错 —— 沙箱不知道有哪些工具，无从判断
+//       `Mcp__github__*`    工具名里的 * 不是通配符 —— Rule::matches 对工具名
+//                           做的是逐字符比较，只有括号里的 pattern 走 fnmatch
+//     这两种都要知道工具表才查得出来，而工具表在 App 里、比沙箱建得晚。
 //
 #include <filesystem>
 #include <functional>
@@ -296,11 +310,38 @@ class Sandbox {
     /// @param cfg   ⚠️ Held by reference; it must outlive this sandbox.
     /// @param asker How to ask a human. Empty means non-interactive.
     ///
-    /// @note Rules that fail to parse are skipped, not fatal. One typo in a
-    ///       config file should not stop the agent from starting.
+    /// @note Rules that fail to parse are skipped, not fatal — and each skip
+    ///       leaves a message in warnings(). One typo in a config file should
+    ///       not stop the agent from starting, nor vanish without a word.
     ///
     /// asker 为空 = 非交互（CI、子 agent）。那时 Ask 该怎么办？想清楚再写。
     Sandbox(const Config& cfg, AskFn asker = {});
+
+    /// @brief Configured rules that could not be parsed, and were skipped.
+    ///
+    /// @return One message per skipped rule, quoting its text; empty when every
+    ///         rule parsed. App forwards these into App::warnings().
+    ///
+    /// @warning A skipped **deny** rule is the dangerous one: the user believes
+    ///          an operation is forbidden and it is not. Its message says so
+    ///          outright instead of sharing the wording of a skipped allow.
+    ///
+    /// @note Skipped, not fatal — a typo in a config file should not stop the
+    ///       agent from starting. Not silent either: a rule that quietly
+    ///       disappears looks, from outside, exactly like one that works.
+    /// @note Only syntax is checked. `Bsah(rm:*)` parses and never matches;
+    ///       telling that apart needs the tool list, which the sandbox lacks.
+    ///
+    /// @code{.test}
+    /// @setup Config cfg = doc_config();
+    /// @setup cfg.allow_rules = {"Bash(git status:*)", "Bash(git log"};
+    /// @setup cfg.deny_rules = {"Read(**/.env", "Write(src/**)"};
+    /// @setup const Sandbox sb(cfg);
+    /// sb.warnings().size()                                           ==> 2u
+    /// sb.warnings()[0].find("Bash(git log") != std::string::npos      ==> true
+    /// sb.warnings()[1].find("没有被禁止") != std::string::npos         ==> true
+    /// @endcode
+    const std::vector<std::string>& warnings() const;
 
     // -- 统一入口：executor 只调这一个 ---------------------------------------
     /// @brief The only door the executor knocks on.
@@ -518,6 +559,7 @@ class Sandbox {
     std::vector<Rule> allow_;
     std::vector<Rule> deny_;
     AskFn asker_;
+    std::vector<std::string> warnings_;   ///< I6：每条被跳过的配置规则一条
 };
 
 /// @brief A command pattern refused outright, whatever the configuration says.

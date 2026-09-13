@@ -834,6 +834,33 @@ MUTANTS = [
         note="模型可以自己解除超时限制",
     ),
 
+    # ── Stage 7：写错的权限规则 ─────────────────────────────────────────────
+    dict(
+        name="解析失败的规则静默跳过，不留警告",
+        file="src/sandbox.cpp",
+        edits=[('            warnings_.push_back(\n                is_deny ? std::format("deny 规则 \\"{}\\" 写法不对，已忽略 —— 它想禁止的操作"\n                                      "现在没有被禁止。合法写法：{}", t, kRuleForms)\n                        : std::format("allow 规则 \\"{}\\" 写法不对，已忽略，相应操作按当前"\n                                      "权限模式处理。合法写法：{}", t, kRuleForms));', "            (void)is_deny;")],
+        binaries=["test_rule_warnings"],
+        expect=["every_skipped_rule_leaves_a_warning_that_quotes_it"],
+        note="配置里明明写着、agent 也照常启动 —— 一条悄悄消失的 deny 规则"
+             "从外面看和一条正常工作的规则一模一样",
+    ),
+    dict(
+        name="deny 被跳过时用 allow 的措辞",
+        file="src/sandbox.cpp",
+        edits=[('                is_deny ? std::format("deny 规则 \\"{}\\" 写法不对，已忽略 —— 它想禁止的操作"\n                                      "现在没有被禁止。合法写法：{}", t, kRuleForms)\n', "                false ? std::string{}\n")],
+        binaries=["test_rule_warnings"],
+        expect=["a_skipped_deny_rule_says_the_operation_is_not_forbidden"],
+        note="跳过 allow 最坏是多问一句；跳过 deny 是用户以为被禁的操作照样能跑。"
+             "同一句话会让人把后者当成前者",
+    ),
+    dict(
+        name="App 不转交沙箱的警告",
+        file="src/app.cpp",
+        edits=[('      for (const auto& w : sandbox.warnings()) warnings.push_back(w);\n', "")],
+        binaries=["test_rule_warnings"],
+        expect=["the_app_forwards_rule_warnings"],
+        note="沙箱记下了，但 cli.cpp 打印的是 App::warnings() —— 用户照样什么都看不到",
+    ),
     # ── Stage 7：MCP 客户端 ─────────────────────────────────────────────────
     dict(
         name="握手后不发 notifications/initialized",

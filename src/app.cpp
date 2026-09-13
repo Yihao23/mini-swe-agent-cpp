@@ -52,6 +52,10 @@ struct App::Impl {
             on_event(std::move(ev)),
             sandbox(cfg, std::move(asker)),
             session(s ? std::move(*s) : Session{}) {
+      // 沙箱在初始化列表里已经建好。它跳过的规则先转交出来 —— 放在最前面，
+      // 因为「一条 deny 规则没生效」比「某个 MCP server 起不来」更要紧。
+      for (const auto& w : sandbox.warnings()) warnings.push_back(w);
+
       cfg.ensure_dirs();                          // ① 建目录
       if (!llm)                                    // ② 没传就建真的客户端
           llm = std::make_unique<AnthropicClient>(cfg);
