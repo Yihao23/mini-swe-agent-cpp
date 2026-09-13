@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="t">
+  <title id="t">mini-swe-agent</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#16263d"/>
+      <stop offset="1" stop-color="#0b1422"/>
+    </linearGradient>
+    <linearGradient id="loop" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7fdcf0"/>
+      <stop offset="1" stop-color="#3a9fd6"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 底：深色圆角方块。那一圈淡描边是给 GitHub 深色主题的 —— 没有它，方块右下角会融进背景 -->
+  <rect x="8" y="8" width="240" height="240" rx="54" fill="url(#bg)"
+        stroke="#2c4a6e" stroke-width="3"/>
+
+  <!-- 循环：问模型 → 执行工具 → 送回结果 → 再问 -->
+  <path d="M 200.5 94.2 A 80 80 0 1 1 155.4 52.8" fill="none" stroke="url(#loop)" stroke-width="16" stroke-linecap="round"/>
+  <polygon points="172.8,59.2 152.2,28.3 137.1,69.6" fill="#7fdcf0" stroke="#7fdcf0" stroke-width="4" stroke-linejoin="round"/>
+
+  <!-- 终端提示符：agent 在终端里干活 -->
+  <polyline points="96,104 122,128 96,152" fill="none" stroke="#f4f7fb" stroke-width="15"
+            stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="134" y1="152" x2="164" y2="152" stroke="#f4f7fb" stroke-width="15" stroke-linecap="round"/>
+</svg>

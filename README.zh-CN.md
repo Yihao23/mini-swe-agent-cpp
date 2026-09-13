@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.svg" width="120" alt="mini-swe-agent logo">
+</p>
+
 # mini-swe-agent (C++23)
 
 [English](README.md) · **简体中文**
