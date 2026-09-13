@@ -1,0 +1,84 @@
+<!--
+  Source of docs/social-preview.png — the card GitHub shows when the repo link
+  is shared. Upload the PNG under Settings → General → Social preview.
+
+  Regenerate after editing:
+    google-chrome --headless=new --hide-scrollbars --window-size=1280,640 \
+      --screenshot=docs/social-preview.png docs/social-preview.html
+
+  No counts in here (tests, mutants, lines): the image is not rebuilt with the
+  code, so any number would quietly go stale.
+-->
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; width: 1280px; height: 640px; overflow: hidden; }
+  body {
+    background: radial-gradient(1100px 700px at 18% 30%, #1b3050 0%, #0f1b2d 55%, #0a1220 100%);
+    font-family: "Inter", "DejaVu Sans", sans-serif;
+    color: #f4f7fb;
+    position: relative;
+  }
+  .ring {
+    position: absolute; right: -180px; top: -220px;
+    width: 720px; height: 720px; border-radius: 50%;
+    border: 2px solid rgba(127, 220, 240, 0.08);
+  }
+  .ring.two { right: -80px; top: -120px; width: 520px; height: 520px; }
+  .wrap {
+    position: absolute; inset: 0;
+    display: flex; align-items: center;
+    padding: 0 96px; gap: 72px;
+  }
+  .logo { width: 300px; height: 300px; flex: none; filter: drop-shadow(0 18px 40px rgba(0,0,0,.45)); }
+  .text { flex: 1; min-width: 0; }
+  .badge {
+    display: inline-block;
+    font-family: "DejaVu Sans Mono", monospace; font-size: 22px;
+    color: #7fdcf0; border: 2px solid rgba(127, 220, 240, 0.45);
+    border-radius: 10px; padding: 6px 14px; margin-bottom: 22px;
+  }
+  h1 {
+    font-family: "Inter Display", "Inter", sans-serif; font-weight: 800;
+    font-size: 88px; line-height: 1; letter-spacing: -2px; margin: 0 0 20px;
+  }
+  .tagline { font-size: 34px; color: #c5d3e3; margin: 0 0 34px; }
+  /* 五个标签要排在一行：字号 21 时 MCP 会被挤到第二行，单独一个很难看 */
+  .chips { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 30px; }
+  .chip {
+    font-family: "DejaVu Sans Mono", monospace; font-size: 19px;
+    background: rgba(127, 220, 240, 0.10); color: #dcebf5;
+    border-radius: 8px; padding: 7px 12px;
+  }
+  .checked { font-size: 22px; color: #7fb3cc; }
+  .checked b { color: #7fdcf0; font-weight: 600; }
+  .url {
+    position: absolute; right: 56px; bottom: 36px;
+    font-family: "DejaVu Sans Mono", monospace; font-size: 18px; color: #5d7892;
+  }
+</style>
+</head>
+<body>
+  <div class="ring"></div>
+  <div class="ring two"></div>
+  <div class="wrap">
+    <img class="logo" src="logo.svg" alt="">
+    <div class="text">
+      <div class="badge">C++23</div>
+      <h1>mini-swe-agent</h1>
+      <p class="tagline">A small coding agent, built stage by stage</p>
+      <div class="chips">
+        <span class="chip">agent loop</span>
+        <span class="chip">tools</span>
+        <span class="chip">permission rules</span>
+        <span class="chip">sub-agents</span>
+        <span class="chip">MCP</span>
+      </div>
+      <div class="checked">checked with <b>tests</b> · <b>mutation testing</b> · <b>ThreadSanitizer</b></div>
+    </div>
+  </div>
+  <div class="url">github.com/Yihao23/mini-swe-agent-cpp</div>
+</body>
+</html>
