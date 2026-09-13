@@ -65,10 +65,11 @@ struct Fixture {
     }
 };
 
-std::shared_ptr<McpClient> mock_client() {
+std::shared_ptr<McpClient> mock_client(
+    std::chrono::milliseconds request_timeout = kMcpRequestTimeout) {
     return std::make_shared<McpClient>("mock", "python3",
                                        std::vector<std::string>{kMockServer.string()},
-                                       fs::temp_directory_path());
+                                       fs::temp_directory_path(), request_timeout);
 }
 
 bool has(const std::string& hay, std::string_view needle) {
@@ -293,7 +294,11 @@ TEST(a_server_entry_without_a_command_is_a_warning) {
 // ── 并发：task_graph 的几个子 agent 可能同时调用同一个 server 的工具 ─────────
 
 TEST(concurrent_calls_on_one_client_each_get_their_own_answer) {
-    const auto c = mock_client();
+    // ⚠️ 超时调到 2 秒。锁失效时，一个线程的响应会被另一个线程读走，
+    //    被抢的线程就一直等自己那条 id —— 用默认的 15 秒，这条用例会卡几分钟
+    //    才失败，看起来像挂死而不是出错。mock server 一次应答只要几毫秒，
+    //    而超时是拿到锁、发出请求之后才开始算的，排队等锁不计入。
+    const auto c = mock_client(std::chrono::seconds(2));
     CHECK(c->initialize().has_value());
 
     // ⚠️ 每个线程**调很多次**，而不是一次。mock server 一次应答只要几毫秒，
@@ -309,8 +314,10 @@ TEST(concurrent_calls_on_one_client_each_get_their_own_answer) {
                 const auto r = c->call_tool("echo", Json{{"text", text}});
                 // 每次文本都不同。锁失效时帧会在管道里交错，或者 A 读到 B 的响应 ——
                 // 那样拿回来的就不是自己发出去的那段文字。
-                if (!r) ++failed;
-                else if (r->first != "echo: " + text) ++wrong;
+                // 第一次出错就收手：锁失效时后面的调用多半也都会错，
+                // 每个都等满超时的话，失败本身就要花几十秒。
+                if (!r) { ++failed; return; }
+                if (r->first != "echo: " + text) { ++wrong; return; }
             }
         });
     for (auto& th : ts) th.join();

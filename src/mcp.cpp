@@ -35,12 +35,6 @@ namespace {
 using Clock = std::chrono::steady_clock;
 using Ms = std::chrono::milliseconds;
 
-/// 一次请求最多等多久。
-///
-/// ⚠️ 必须有。第三方 server 起不来、卡在自己的初始化里、或者干脆不认识这个
-///    method —— 没有超时的话表现是 agent 整个不动，而且不打印任何东西。
-constexpr Ms kRequestTimeout{15000};
-
 /// close() 时给 server 多久自己退出，然后上信号。
 constexpr Ms kShutdownGrace{500};
 
@@ -79,7 +73,8 @@ struct McpClient::Impl {
     ///    新来的请求直接拒绝，不去排队抢锁 —— 否则一个不停调用的线程可能一直
     ///    抢在 close() 前面，std::mutex 不保证公平。
     std::atomic<bool> closed{false};
-    std::string spawn_error;    ///< 非空 = 进程压根没起来
+    std::string spawn_error;
+    Ms request_timeout{kMcpRequestTimeout};   ///< 构造时定下，之后只读    ///< 非空 = 进程压根没起来
 
     /// ⚠️ 一根管道上的 JSON-RPC 帧不能交错。两个线程同时发请求，
     ///    两条消息会拌在一起，而且响应也分不清是谁的。整个「发+等」是一个原子操作。
@@ -217,7 +212,7 @@ struct McpClient::Impl {
         if (!send_line(msg))
             return std::unexpected(std::format("写 {} 请求失败：管道已断", method));
 
-        const auto deadline = Clock::now() + kRequestTimeout;
+        const auto deadline = Clock::now() + request_timeout;
         for (;;) {
             std::string err;
             const auto line = read_line(deadline, err);
@@ -272,7 +267,7 @@ struct McpClient::Impl {
     ///
     /// @note Holds the lock for the whole shutdown, so it waits for an
     ///       in-flight request to finish instead of closing descriptors under
-    ///       it. That wait is bounded by kRequestTimeout. Requests arriving
+    ///       it. That wait is bounded by request_timeout. Requests arriving
     ///       meanwhile see `closed` and fail before queueing for the lock.
     /// @note Sleeps while holding the lock (the grace period). Anyone blocked
     ///       on the lock then only finds `closed` set and returns an error.
@@ -281,7 +276,7 @@ struct McpClient::Impl {
         // 分成两步的话，两个线程可能都看到 false，都去关 fd。
         if (closed.exchange(true)) return;
 
-        // ⚠️ 拿锁：等正在进行的那次请求结束（最多 kRequestTimeout），再动 fd。
+        // ⚠️ 拿锁：等正在进行的那次请求结束（最多 request_timeout），再动 fd。
         //    不拿锁就关 fd，那个 fd 号会被本进程下一个 open() 立刻复用 ——
         //    正卡在 read() 里的请求线程读到的就是别的文件，没有任何症状。
         //    TSan 在修复前实测报了这里：close() 写 closed、关写端、关读端，
@@ -340,9 +335,10 @@ struct McpClient::Impl {
 ///     → 构造照样返回；第一次请求读到 EOF，报"server 已退出"
 /// @endcode
 McpClient::McpClient(std::string name, std::string command, std::vector<std::string> args,
-                     const fs::path& cwd)
+                     const fs::path& cwd, std::chrono::milliseconds request_timeout)
     : impl_(std::make_unique<Impl>()) {
     impl_->name = std::move(name);
+    impl_->request_timeout = request_timeout;
 
     const PipedProcess p = spawn_piped(command, args, cwd);
     if (!p.ok) {

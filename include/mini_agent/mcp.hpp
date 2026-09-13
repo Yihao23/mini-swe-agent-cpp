@@ -93,6 +93,7 @@
 //   * 工具名。它来自第三方 server，里面要是带 `*` `?` `[`，想精确点名它的
 //     权限规则会被当成通配。
 //
+#include <chrono>
 #include <expected>
 #include <filesystem>
 #include <memory>
@@ -104,6 +105,13 @@
 namespace mini {
 
 namespace fs = std::filesystem;
+
+/// @brief How long one request waits for its response by default.
+///
+/// @note Needed at all because the far end is a third-party process: one that
+///       hangs in its own start-up, or never answers a method it does not know,
+///       would otherwise stall the agent with nothing printed.
+inline constexpr std::chrono::milliseconds kMcpRequestTimeout{15000};
 
 /// @brief The MCP revision this client speaks, sent during the handshake.
 inline constexpr const char* kMcpProtocolVersion = "2024-11-05";
@@ -125,6 +133,9 @@ class McpClient {
     /// @param command The executable.
     /// @param args    Its arguments.
     /// @param cwd     Working directory for the child.
+    /// @param request_timeout How long each request waits for its response.
+    ///        The default suits real servers; tests pass something short so a
+    ///        broken client fails in a second instead of stalling.
     ///
     /// @note Does not throw. A command that cannot be started is recorded and
     ///       reported by the first request, so one bad server costs its own
@@ -136,7 +147,8 @@ class McpClient {
     /// bad.name()                     ==>   "nope"
     /// @endcode
     McpClient(std::string name, std::string command, std::vector<std::string> args,
-              const fs::path& cwd);
+              const fs::path& cwd,
+              std::chrono::milliseconds request_timeout = kMcpRequestTimeout);
     ~McpClient();
 
     McpClient(const McpClient&) = delete;
