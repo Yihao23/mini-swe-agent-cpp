@@ -861,6 +861,34 @@ MUTANTS = [
         expect=["the_app_forwards_rule_warnings"],
         note="沙箱记下了，但 cli.cpp 打印的是 App::warnings() —— 用户照样什么都看不到",
     ),
+    # ── Stage 7：--continue ────────────────────────────────────────────────
+    dict(
+        name="按文件名而不是最后写入时间挑最近的会话",
+        file="src/session.cpp",
+        edits=[('        if (!best || t > best_time || (t == best_time && e.path() > *best)) {', "        if (!best || e.path() > *best) {")],
+        binaries=["test_session"],
+        expect=["latest_session_picks_the_most_recently_written_not_the_newest_name"],
+        note="id 是创建时刻。恢复一个旧会话聊了几轮再退出，下次 -c 会跳到一个"
+             "更晚创建、但早就没人用的会话上",
+    ),
+    dict(
+        name="挑最近会话时不过滤扩展名",
+        file="src/session.cpp",
+        edits=[('        if (!e.is_regular_file(ec) || e.path().extension() != ".json") continue;', "        if (!e.is_regular_file(ec)) continue;")],
+        binaries=["test_session"],
+        expect=["latest_session_ignores_a_leftover_temp_file"],
+        note="save() 写到一半崩溃留下的 .json.tmp 永远是目录里最新的 —— "
+             "-c 会去读那个半截文件",
+    ),
+    dict(
+        name="App 无条件重新 bind 会话路径",
+        file="src/app.cpp",
+        edits=[('      if (session.path().empty()) session.bind(cfg.sessions_dir());', "      session.bind(cfg.sessions_dir());")],
+        binaries=["test_session"],
+        expect=["a_resumed_session_keeps_writing_to_the_file_it_came_from"],
+        note="恢复的会话被改写到 <id>.json：改过名的文件停在原地，继续聊的内容进了"
+             "新文件，历史劈成两半",
+    ),
     # ── Stage 7：MCP 客户端 ─────────────────────────────────────────────────
     dict(
         name="握手后不发 notifications/initialized",

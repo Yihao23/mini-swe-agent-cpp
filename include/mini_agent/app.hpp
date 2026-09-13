@@ -94,7 +94,8 @@
 //
 //   ① cfg.ensure_dirs()               建目录（看 enable_* 开关）
 //   ② llm 为空 → AnthropicClient       测试传 FakeLlm 进来就跳过
-//   ③ session.bind(sessions_dir())     定落盘位置，此刻还没写文件
+//   ③ session.bind(sessions_dir())     定落盘位置，此刻还没写文件；
+//                                      恢复的会话已有路径，不重新 bind
 //   ④ memory / skills                  开关打开才建
 //        background                    没有开关 —— 总是建
 //   ⑤ builtin_tools(cfg) → registry    工具表也按开关拼

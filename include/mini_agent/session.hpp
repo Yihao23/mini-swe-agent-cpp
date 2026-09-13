@@ -90,6 +90,7 @@
 //
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -297,5 +298,34 @@ class Session {
 ///       of what was done, with no statement of what is left, leaves the agent
 ///       with no next step to take.
 extern const char* kCompactPrompt;
+
+/// @brief The session file in `dir` that was written most recently — what
+///        `--continue` resumes.
+///
+/// @param dir A sessions directory, usually Config::sessions_dir().
+/// @return Its path; nullopt when the directory is missing or holds no session.
+///
+/// @warning Ordered by **last write time**, not by filename. An id is the
+///          creation timestamp, so sorting names finds the session started most
+///          recently. But a session is saved on every turn: resume an old one,
+///          work in it, quit — and `--continue` must come back to that one, not
+///          to a newer session nobody has touched since.
+///
+/// @note Only `*.json`. save() writes `<id>.json.tmp` and renames it; a crash
+///       between the two leaves the temp file behind, and it is always the
+///       newest thing in the directory.
+/// @note Ties on write time fall back to the filename, so the answer does not
+///       depend on directory iteration order.
+///
+/// @code{.test}
+/// @setup DocTools t;
+/// @setup const auto dir = t.cfg.sessions_dir();
+/// latest_session(dir).has_value()                                      ==> false
+/// @setup Session older; older.bind(dir).save();
+/// @setup Session newer; newer.bind(dir).save();
+/// @setup std::filesystem::last_write_time(older.path(), std::filesystem::last_write_time(newer.path()) + 1h);
+/// latest_session(dir) == older.path()                                  ==> true
+/// @endcode
+std::optional<fs::path> latest_session(const fs::path& dir);
 
 }  // namespace mini

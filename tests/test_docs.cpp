@@ -362,8 +362,8 @@ TEST(doc_include_mini_agent_scheduler_hpp_L260) {
     CHECK_MSG((f.tasks().at("after").status) == (TaskStatus::Blocked), "include/mini_agent/scheduler.hpp:282 的示例失效了");
 }
 
-/// From include/mini_agent/session.hpp:191
-TEST(doc_include_mini_agent_session_hpp_L191) {
+/// From include/mini_agent/session.hpp:192
+TEST(doc_include_mini_agent_session_hpp_L192) {
     // 0 user "task1"      ← 安全，但落在 keep_recent 窗口里
     // 1 assistant tool_use
     // 2 user tool_result  ← 不安全：切在这里会让 1 的 tool_use 变成孤儿
@@ -379,12 +379,23 @@ TEST(doc_include_mini_agent_session_hpp_L191) {
         Message{Role::User, {TextBlock{"task2"}}},
         Message{Role::Assistant, {TextBlock{"working"}}}};
     // 从下标 3 往前扫，只找到落在窗口内的 0 → 返回 0，这次不压
-    CHECK_MSG((s.safe_split(3)) == (0u), "include/mini_agent/session.hpp:207 的示例失效了");
+    CHECK_MSG((s.safe_split(3)) == (0u), "include/mini_agent/session.hpp:208 的示例失效了");
     // 窗口收窄到 1，下标 4 就在窗口外了，切在那条真正的用户输入上
-    CHECK_MSG((s.safe_split(1)) == (4u), "include/mini_agent/session.hpp:209 的示例失效了");
+    CHECK_MSG((s.safe_split(1)) == (4u), "include/mini_agent/session.hpp:210 的示例失效了");
     // ⚠️ 永远不会返回 2 —— 那是 tool_result，切在那里下一轮请求必然 400
-    CHECK_MSG(((s.safe_split(2) != 2u)) == (true), "include/mini_agent/session.hpp:211 的示例失效了");
-    CHECK_MSG(((s.safe_split(4) != 2u)) == (true), "include/mini_agent/session.hpp:212 的示例失效了");
+    CHECK_MSG(((s.safe_split(2) != 2u)) == (true), "include/mini_agent/session.hpp:212 的示例失效了");
+    CHECK_MSG(((s.safe_split(4) != 2u)) == (true), "include/mini_agent/session.hpp:213 的示例失效了");
+}
+
+/// From include/mini_agent/session.hpp:320
+TEST(doc_include_mini_agent_session_hpp_L320) {
+    DocTools t;
+    const auto dir = t.cfg.sessions_dir();
+    CHECK_MSG((latest_session(dir).has_value()) == (false), "include/mini_agent/session.hpp:323 的示例失效了");
+    Session older; older.bind(dir).save();
+    Session newer; newer.bind(dir).save();
+    std::filesystem::last_write_time(older.path(), std::filesystem::last_write_time(newer.path()) + 1h);
+    CHECK_MSG((latest_session(dir) == older.path()) == (true), "include/mini_agent/session.hpp:327 的示例失效了");
 }
 
 /// From include/mini_agent/tool.hpp:121

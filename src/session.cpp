@@ -237,4 +237,31 @@ Session Session::load(const fs::path& p) {
     return s;
 }
 
+std::optional<fs::path> latest_session(const fs::path& dir) {
+    std::error_code ec;
+    if (!fs::is_directory(dir, ec)) return std::nullopt;
+
+    std::optional<fs::path> best;
+    fs::file_time_type best_time{};
+    for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator();
+         it.increment(ec)) {
+        const auto& e = *it;
+        // ⚠️ 只认 .json。save() 先写 <id>.json.tmp 再 rename，两步之间崩溃会留下
+        //    .tmp —— 而它永远是目录里最新的那个文件。
+        if (!e.is_regular_file(ec) || e.path().extension() != ".json") continue;
+
+        const auto t = e.last_write_time(ec);
+        if (ec) { ec.clear(); continue; }   // 读 mtime 失败（刚被删掉？）就跳过这一个
+
+        // ⚠️ 按**最后写入时间**，不按文件名。id 是创建时刻，按名字排得到的是
+        //    「最近创建的」；会话每轮都落盘，mtime 才是「最近用过的」。
+        //    时间相同再比文件名，免得结果取决于目录遍历顺序。
+        if (!best || t > best_time || (t == best_time && e.path() > *best)) {
+            best = e.path();
+            best_time = t;
+        }
+    }
+    return best;
+}
+
 }  // namespace mini

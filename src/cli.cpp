@@ -227,8 +227,22 @@ int cli_main(int argc, char** argv) {
 
     std::optional<Session> resumed;
     if (continue_session) {
-        // TODO(Stage 7): 找 sessions_dir 里最新的那个会话文件
-        std::fprintf(stderr, "--continue 还没实现\n");
+        // 找不到或读不了都**不是致命错误**：说一句，从头开始。
+        // 为了继续一个会话失败就拒绝启动，用户手里的任务反而做不成。
+        if (const auto p = latest_session(loaded.sessions_dir())) {
+            Session s = Session::load(*p);
+            if (s.path().empty()) {
+                // load() 解析失败时返回一个没有路径的新会话，坏文件原样留着。
+                std::fprintf(stderr, "%s⚠ 最近的会话文件读不了（%s），从头开始。文件保留在原处。%s\n",
+                             kYellow, p->c_str(), kReset);
+            } else {
+                std::fprintf(stderr, "继续会话 %s（%zu 条消息）\n", s.id().c_str(),
+                             s.messages().size());
+                resumed = std::move(s);
+            }
+        } else {
+            std::fprintf(stderr, "没有可继续的会话，从头开始。\n");
+        }
     }
 
     Renderer render(loaded.show_thinking);

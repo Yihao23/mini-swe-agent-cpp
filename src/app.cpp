@@ -59,7 +59,12 @@ struct App::Impl {
       cfg.ensure_dirs();                          // ① 建目录
       if (!llm)                                    // ② 没传就建真的客户端
           llm = std::make_unique<AnthropicClient>(cfg);
-      session.bind(cfg.sessions_dir());            // ③ 会话落盘位置
+      // ③ 会话落盘位置。⚠️ 只给**还没有路径**的会话定位置。
+      //    恢复的会话由 Session::load() 设好了路径 —— 那个契约写明了「写回它
+      //    读入的那个文件」。无条件 bind 会把它改成 sessions_dir/<id>.json：
+      //    文件改过名、或者 JSON 里没有 id 字段时，就会另起一个新文件，
+      //    下次 --continue 按 mtime 挑中的可能是任何一个。
+      if (session.path().empty()) session.bind(cfg.sessions_dir());
 
       // ④ Stage 5：两个渐进式披露的来源。只在开关打开时建 ——
       //    Memory 的构造会建目录，关掉的时候不该在别人的工作区里留下空文件夹。
