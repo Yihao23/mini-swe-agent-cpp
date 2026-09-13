@@ -2,168 +2,109 @@
 
 [English](README.md) · **简体中文**
 
-一个 SWE agent 的**骨架**。头文件、构建系统、测试都搭好了，函数体是你的活。
-
-```bash
-cmake -S . -B build -G Ninja
-cmake --build build
-ctest --test-dir build --output-on-failure
-```
-
-`test_smoke` 一开始全红。每条失败信息直接告诉你下一步该实现哪个函数（截至最新提交 15 条全绿）：
-
-```
-✗ loop_runs_tool_then_answers
-    TODO — Stage 7: App 构造 —— 把十几个模块接起来
-```
-
 ## 这是什么
 
-不是"怎么调 LLM API"的教程。真正值得学的是 C++ 逼你做的那些决定 —— 脚本语言全都帮你藏起来了：所有权、生命周期、并发、子进程管理。
+一个用 C++23 写的小型编程 agent。用自然语言给它一个任务，它会调用 Claude、
+读写文件、执行命令，一直做到任务完成。
 
-整个设计建立在三个心智模型上：
+agent 的核心就是一个循环：问模型 → 执行它要的工具 → 把结果送回去 → 再问。
+这个项目里其余的一切 —— 权限控制、上下文管理、子 agent、外部工具 —— 都是围绕这个循环搭起来的。
 
-1. **Agent 就是一个 while 循环。** 问模型、执行它要的工具、把结果喂回去、重复到它不再要工具为止。十行代码。其余的一切 —— 权限、并发、上下文压缩、子 agent —— 都是围绕这十行的流程控制。
-2. **一切能力都长在同一个接口上。** 工具 = JSON Schema（描述给模型看）+ `run()` 函数（你来执行）。文件操作、bash、子 agent、远程 MCP 服务，全是这一个形状。
-3. **上下文是唯一的稀缺资源。** 模型没有记忆，每一轮都要把整个历史重新发过去。这一个事实解释了这个项目里一半的设计：压缩、子 agent 隔离、渐进式披露，以及 system prompt 必须逐字节稳定。
+## 我做了什么
 
-## 仓库结构
+七个阶段全部实现：
 
-```
-mini-swe-agent-cpp/
-├── BUILD-GUIDE.md          分阶段建造指南（先读这个）
-├── ARCHITECTURE.md         带图的设计总览
-├── include/mini_agent/     契约。每个头文件顶部讲清楚"为什么这么设计" ——
-│                           那是文档的一部分，不是装饰
-├── src/                    你的战场。未实现的函数体调用 todo("Stage N: ...")
-├── Doxyfile                注释校验用（@param 拼错、@ref 断链会当场报错）
-├── tools/
-│   ├── gen_doc_tests.py    把头文件的 @code{.test} 抽成真正的断言
-│   └── mutate.py           变异测试：验证测试真的抓得到 bug
-└── tests/
-    ├── microtest.hpp       50 行的测试框架，你能一口气读完
-    ├── test_smoke.cpp      15 个用例，就是规格说明书
-    ├── test_loop.cpp       一轮对话的形状，不经过 App 手工接线
-    ├── test_config.cpp     优先级链与 to_string 往返一致性
-    ├── test_tool.cpp       工具注册表与 schema 的不变量
-    ├── test_parser.cpp     循环两端的 wire format 契约
-    ├── test_session.cpp    持久化 round-trip
-    ├── test_process.cpp    子进程超时、进程组、输出截断
-    ├── test_bash.cpp       bash 工具：四种失败方式怎么塌成一个 is_error
-    ├── test_file_tools.cpp write 工具与三个文件工具的参数加固
-    ├── test_search_tools.cpp glob 与 grep：找得到，且不被 build/ 淹没
-    ├── test_docs.cpp       生成物，勿手改
-    ├── doc_prelude.hpp     给文档示例用的脚手架
-    └── mock_mcp_server.py  假 MCP server，Stage 7 验证握手用
-```
-
-测试怎么组织、为什么还有第三层（变异测试），见 [docs/testing.zh-CN.md](docs/testing.zh-CN.md)。
-
-## 阶段划分
-
-每个阶段都是独立可停的增量，停在任何一个阶段都能得到能用的东西。
-
-| 阶段 | 主要文件 | 结束时你拥有 |
-|---|---|---|
-| 0 | `config` `message` | 一套贯穿全局的类型 |
-| 1 | `llm` `parser` `session` `loop` | **一个真能干活的 agent** |
-| 2 | `tool` `executor` `process` | 完整工具层 + 并发执行 |
-| 3 | `sandbox` | 权限闸门，敢在真项目上跑 |
-| 4 | `prompt` `session::compact` | 缓存友好 + 长任务不爆上下文 |
-| 5 | `memory` `skills` | 跨会话记忆 + 技能插件 |
-| 6 | `subagent` `scheduler` `background` | 多 agent + 任务图 + 后台任务 |
-| 7 | `mcp` `app` `cli` | 接外部工具 + 能用的界面 |
-
-## 当前进度
-
-```
-Stage 0  ████████████████████  完成
-Stage 1  ████████████████████  循环、真实客户端、SSE 流式
-Stage 2  ████████████████░░░░  executor、工具注册表、read 和 edit
-Stage 4  ████░░░░░░░░░░░░░░░░  safe_split；压缩本身待写
-Stage 6  ██████░░░░░░░░░░░░░░  任务调度器
-Stage 7  ████████████░░░░░░░░  App 装配 + 能用的 CLI
-Stage 3  ████████████████████  完成 —— 闸门已接进 executor
-Stage 4+ ░░░░░░░░░░░░░░░░░░░░
-```
-
-| 测试 | 结果 |
+| 阶段 | 内容 |
 |---|---|
-| `test_loop` | 16/16 |
-| `test_config` | 19/19 |
-| `test_tool` | 17/17 |
-| `test_parser` | 14/14 |
-| `test_session` | 12/12 |
-| `test_process` | 14/14 |
-| `test_bash` | 12/12 |
-| `test_file_tools` | 13/13 |
-| `test_search_tools` | 19/19 |
-| `test_docs` | 19 块 / 106 条（从头文件生成） |
-| `test_smoke` | **15/15** |
+| 0–1 | agent 主循环、支持流式输出的真实 Anthropic 客户端、会话历史 |
+| 2 | 工具：`read` `write` `edit` `glob` `grep` `bash` `todo`，带超时的命令执行 |
+| 3 | 权限闸门：allow / deny 规则、权限模式、危险命令检查 |
+| 4 | 对提示缓存友好的 prompt，长对话自动压缩 |
+| 5 | 长期记忆和 skills |
+| 6 | 子 agent、并行执行子 agent 的任务图、后台命令 |
+| 7 | 接入外部工具的 MCP 客户端、命令行界面、`--continue` |
 
-`-Wall -Wextra -Wpedantic` 下零警告。
+用四种方式验证：
 
-```bash
-cmake --build build --target docs   # 生成 API 文档，顺便校验注释本身没写错
-python3 tools/mutate.py             # 把 bug 种回去，看该红的用例会不会红
-```
+- **测试**：22 个测试程序，全部离线运行（用一个假模型代替 API）。
+- **文档示例**：头文件里的代码示例会被编译成测试并实际运行。
+- **变异测试**：`tools/mutate.py` 往代码里埋 102 个已知的 bug，检查每个都能被对应的测试抓到；其中 5 个明确登记为「暂时抓不到」，并写明了原因。
+- **ThreadSanitizer**：单独的一套构建，检查并发代码有没有数据竞争。
 
-见 [docs/testing.zh-CN.md](docs/testing.zh-CN.md)。
+这些检查找出并修掉了真实的 bug，比如：多个子 agent 共用一个客户端时互相破坏响应；
+每个后台任务泄漏一个文件描述符；「总是允许」悄悄放行了比用户批准的更多的命令。
 
-## 真跑起来
+## 怎么用
 
-```bash
-sudo apt install libcurl4-openssl-dev     # 只有真实客户端需要
-cmake -S . -B build -G Ninja && cmake --build build
-
-export ANTHROPIC_API_KEY=sk-ant-...
-./build/mini-agent                        # 交互模式
-./build/mini-agent "读一下 src/session.cpp，看看 safe_split 有没有问题"   # 一次性任务
-./build/mini-agent --help
-```
-
-不给任务参数就进 REPL，`/help` 列出斜杠命令。`--mode yolo` 跳过权限确认。
-接了渲染器时回答会边生成边出现。
-
-## 依赖只有两个
-
-| 依赖 | 怎么来 | 用在哪 |
-|---|---|---|
-| nlohmann/json | CMake `FetchContent` 自动拉 | 只在 `json.hpp` 里 typedef 一次 |
-| libcurl | `sudo apt install libcurl4-openssl-dev` | 只有 `src/llm.cpp` 用 |
-
-**没装 libcurl 也能做完 Stage 0–6** —— 所有测试走 `FakeLlm`，不碰网络。CMake 检测不到 libcurl 时会打一条警告然后正常继续。
-
-## 环境
-
-已验证：g++ 13.3 / CMake 3.28 / Ninja 1.11 / Ubuntu 24.04。
-
-用到三个 C++23 特性，各有明确理由：
-
-| 特性 | 用在哪 | 为什么 |
-|---|---|---|
-| `std::expected` | `LlmClient::complete` | 失败是值不是异常 —— 429/529 要能重试 |
-| `std::jthread` | 后台任务的输出泵 | 析构自动 join，还自带 stop_token |
-| `std::format` | prompt 拼接、终端渲染 | 省掉一堆 ostringstream |
-
-clangd 的配置在 `.clangd`（不加它会误报 `std::expected` 不存在）。
-
-## 测试
+### 构建
 
 ```bash
-cmake --build build && ctest --test-dir build --output-on-failure
-./build/test_tool                       # 开发时看每个用例的逐条输出
+sudo apt install libcurl4-openssl-dev      # 调用真实 API 需要
+cmake -S . -B build -G Ninja
+cmake --build build
 ```
 
-新加测试只要往 `tests/` 里放一个 `test_*.cpp` —— CMake 会 glob 成独立可执行文件并注册进 ctest，不用改构建脚本。
+在 Ubuntu 24.04、g++ 13、CMake 3.28、Ninja 上验证过。
 
-绿灯只说明代码和测试的假设一致，不说明测试真的在看。想确认一条断言有效，就把它覆盖的东西改坏，看它是不是变红：
+### 运行
 
 ```bash
-sed -i 's/a->name() == v/a->description() == v/' src/tool.cpp
-cmake --build build --target test_tool && ./build/test_tool   # 应该变红
+export ANTHROPIC_API_KEY=...
+
+./build/mini-agent                                 # 交互模式
+./build/mini-agent "找出会话保存在哪里"             # 执行一个任务后退出
+./build/mini-agent -c                              # 接着上次的会话
 ```
 
-## 和 Python 参考实现的关系
+| 选项 | 含义 |
+|---|---|
+| `-C, --dir <路径>` | 工作目录（默认当前目录） |
+| `--model <名字>` | 使用的模型 |
+| `--mode <模式>` | `read-only` · `ask` · `auto` · `yolo` |
+| `--no-stream` | 回答完再一次性打印，不边生成边输出 |
+| `-c, --continue` | 恢复最近用过的会话 |
 
-`../mini-swe-agent/reference/` 是同一个设计的 Python 完整实现，3100 行、21 个测试全绿。用它来**对照行为**，不是用来抄结构 —— C++ 版有一整套 Python 里不存在的问题，那部分 `BUILD-GUIDE.md` 里单独讲。
+交互模式里可用：`/help` `/tools` `/usage` `/session` `/mode` `/clear` `/exit`。
+
+### 配置（可选）
+
+所有配置都放在工作目录下的 `.mini-agent/` 里。
+
+`.mini-agent/config.json`：
+
+```json
+{
+  "model": "claude-opus-5",
+  "permission_mode": "ask",
+  "allow_rules": ["Bash(git status:*)", "Read"],
+  "deny_rules": ["Bash(rm:*)"]
+}
+```
+
+`.mini-agent/mcp.json`：外部工具服务器（任何通过 stdio 说 MCP 协议的程序都行）
+
+```json
+{ "mcpServers": { "notes": { "command": "python3", "args": ["notes_server.py"] } } }
+```
+
+它的工具会显示为 `mcp__notes__<工具名>`，所以规则 `Mcp__notes__*` 能盖住它的全部工具。
+
+环境变量优先于配置文件：`MINI_AGENT_MODEL`、`MINI_AGENT_MODE`、
+`MINI_AGENT_EFFORT`、`MINI_AGENT_MAX_STEPS`。
+
+### 测试
+
+```bash
+ctest --test-dir build --output-on-failure    # 全部测试
+python3 tools/mutate.py                       # 变异测试（较慢）
+cmake --build build --target docs             # 检查文档注释
+
+cmake -S . -B build-tsan -DMINI_AGENT_SANITIZE=thread   # 数据竞争检查
+cmake --build build-tsan && ctest --test-dir build-tsan
+```
+
+## 更多
+
+[BUILD-GUIDE.md](BUILD-GUIDE.md) 按阶段讲怎么搭 ·
+[ARCHITECTURE.md](ARCHITECTURE.md) 讲设计 ·
+[docs/testing.md](docs/testing.md) 讲测试分层

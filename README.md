@@ -2,190 +2,114 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-A skeleton of a SWE agent. Headers, build system and tests are in place — the
-function bodies are the exercise.
-
-```bash
-cmake -S . -B build -G Ninja
-cmake --build build
-ctest --test-dir build --output-on-failure
-```
-
-`test_smoke` starts out entirely red. Each failure names the next function to
-write (all 15 pass as of the latest commit):
-
-```
-✗ loop_runs_tool_then_answers
-    TODO — Stage 7: App 构造 —— 把十几个模块接起来
-```
-
 ## What this is
 
-Not a tutorial on calling an LLM API. The interesting part is everything C++
-forces you to decide that a scripting language hides: ownership, lifetimes,
-concurrency, subprocess management.
+A small coding agent written in C++23. You give it a task in plain language; it
+calls Claude, reads and edits files, runs commands, and keeps going until the
+task is done.
 
-Three ideas carry the whole design:
+At its core an agent is a loop: ask the model, run the tools it asks for, send
+the results back, repeat. Everything else in this project — permissions,
+context management, sub-agents, external tools — is built around that loop.
 
-1. **An agent is a while loop.** Ask the model, run the tools it asks for, feed
-   the results back, repeat until it stops asking. Ten lines. Everything else —
-   permissions, concurrency, compaction, sub-agents — is flow control around
-   those ten lines.
-2. **Every capability is the same shape.** A tool is a JSON Schema (for the
-   model) plus a `run()` function (for you). File I/O, bash, sub-agents and
-   remote MCP servers all fit that one interface.
-3. **Context is the scarce resource.** The model has no memory; every turn
-   resends the whole history. That single fact explains compaction, sub-agent
-   isolation, progressive disclosure and the byte-stability requirement on the
-   system prompt.
+## What I have done
 
-## Layout
+All seven stages are implemented:
 
-```
-mini-swe-agent-cpp/
-├── BUILD-GUIDE.md          Stage-by-stage construction guide (read this first)
-├── ARCHITECTURE.md         Design overview with diagrams
-├── include/mini_agent/     The contracts. Every header opens with *why* it is
-│                           shaped that way — that is documentation, not decoration
-├── src/                    The work. Unimplemented bodies call todo("Stage N: ...")
-├── Doxyfile                Comment checking — a wrong @param or a dead @ref fails
-├── tools/
-│   ├── gen_doc_tests.py    Lifts @code{.test} blocks out of headers into assertions
-│   └── mutate.py           Mutation testing — do the tests catch what they name?
-└── tests/
-    ├── microtest.hpp       A 50-line test framework you can read in one sitting
-    ├── test_smoke.cpp      15 cases that serve as the specification
-    ├── test_loop.cpp       Shape of a turn, wired up without App
-    ├── test_config.cpp     Priority chain and the to_string round trip
-    ├── test_tool.cpp       Tool registry and schema invariants
-    ├── test_parser.cpp     Wire-format contracts on both ends of the loop
-    ├── test_session.cpp    Persistence round-trip
-    ├── test_process.cpp    Subprocess timeout, process groups, output truncation
-    ├── test_bash.cpp       How four kinds of failure collapse into one is_error
-    ├── test_file_tools.cpp The write tool, and typed argument reads
-    ├── test_search_tools.cpp glob and grep — found, and not drowned by build/
-    ├── test_docs.cpp       Generated — do not edit
-    ├── doc_prelude.hpp     Scaffolding the documented examples share
-    └── mock_mcp_server.py  A fake MCP server for the Stage 7 handshake
-```
-
-How the tests are organised, and why there is a third layer, is in
-[docs/testing.md](docs/testing.md).
-
-## Stages
-
-Each stage is a self-contained increment; stopping after any of them leaves
-something usable.
-
-| Stage | Files | What you end up with |
-|---|---|---|
-| 0 | `config` `message` | The types that run through everything |
-| 1 | `llm` `parser` `session` `loop` | **An agent that actually works** |
-| 2 | `tool` `executor` `process` | Full tool layer with concurrent execution |
-| 3 | `sandbox` | A permission gate you'd trust on a real repo |
-| 4 | `prompt` `session::compact` | Cache-friendly prompts, long tasks that don't overflow |
-| 5 | `memory` `skills` | Cross-session memory and skill plugins |
-| 6 | `subagent` `scheduler` `background` | Multi-agent, task graphs, background jobs |
-| 7 | `mcp` `app` `cli` | External tools and a usable interface |
-
-## Current status
-
-```
-Stage 0  ████████████████████  done
-Stage 1  ████████████████████  loop, the real client, SSE streaming
-Stage 2  ████████████████░░░░  executor, tool registry, read and edit
-Stage 4  ████░░░░░░░░░░░░░░░░  safe_split; compaction itself still open
-Stage 6  ██████░░░░░░░░░░░░░░  task scheduler
-Stage 7  ████████████░░░░░░░░  App wiring and a working CLI
-Stage 3  ████████████████████  done — the gate is wired into the executor
-Stage 4+ ░░░░░░░░░░░░░░░░░░░░
-```
-
-| Suite | Result |
+| Stage | What it adds |
 |---|---|
-| `test_loop` | 16/16 |
-| `test_config` | 19/19 |
-| `test_tool` | 17/17 |
-| `test_parser` | 14/14 |
-| `test_session` | 12/12 |
-| `test_process` | 14/14 |
-| `test_bash` | 12/12 |
-| `test_file_tools` | 13/13 |
-| `test_search_tools` | 19/19 |
-| `test_docs` | 19 blocks / 106 assertions, generated from the headers |
-| `test_smoke` | **15/15** |
+| 0–1 | The agent loop, a real Anthropic client with streaming, session history |
+| 2 | Tools: `read` `write` `edit` `glob` `grep` `bash` `todo`, commands with timeouts |
+| 3 | A permission gate: allow/deny rules, permission modes, dangerous-command checks |
+| 4 | Cache-friendly prompts and automatic compaction of long conversations |
+| 5 | Long-term memory and skills |
+| 6 | Sub-agents, task graphs that run them in parallel, background commands |
+| 7 | MCP client for external tools, a command-line interface, `--continue` |
 
-Builds clean under `-Wall -Wextra -Wpedantic`.
+Checked four ways:
 
-```bash
-cmake --build build --target docs   # build the API docs, checking the comments themselves
-python3 tools/mutate.py             # put the bugs back; check the right cases go red
-```
+- **Tests** — 22 test programs, all offline (a fake model stands in for the API).
+- **Documented examples** — code examples in the headers are compiled and run as tests.
+- **Mutation testing** — `tools/mutate.py` plants 102 known bugs and checks that
+  the right test catches each one; 5 are recorded as not yet caught, with the reason.
+- **ThreadSanitizer** — a separate build that checks the concurrent code for data races.
 
-See [docs/testing.md](docs/testing.md).
+These checks found and fixed real bugs, including sub-agents corrupting each
+other's responses through a shared client, a leaked file descriptor per
+background task, and an "always allow" approval that silently allowed more than
+the user approved.
 
-## Running it for real
+## How to use it
 
-```bash
-sudo apt install libcurl4-openssl-dev     # only needed for the real client
-cmake -S . -B build -G Ninja && cmake --build build
-
-export ANTHROPIC_API_KEY=sk-ant-...
-./build/mini-agent                        # interactive
-./build/mini-agent "read src/session.cpp and check safe_split"   # one-shot
-./build/mini-agent --help
-```
-
-Without a task argument it enters a REPL; `/help` lists the slash commands.
-`--mode yolo` skips the permission prompts. Answers stream in as they are
-generated when a renderer is attached.
-
-## Dependencies
-
-| Dependency | How it arrives | Used by |
-|---|---|---|
-| nlohmann/json | CMake `FetchContent`, automatic | Aliased once in `json.hpp` |
-| libcurl | `sudo apt install libcurl4-openssl-dev` | `src/llm.cpp` only |
-
-**Stages 0–6 need no libcurl.** Every test runs against `FakeLlm` and never
-touches the network. CMake warns and carries on when libcurl is missing.
-
-## Requirements
-
-Verified on g++ 13.3, CMake 3.28, Ninja 1.11, Ubuntu 24.04.
-
-Three C++23 features are used, each for a stated reason:
-
-| Feature | Where | Why |
-|---|---|---|
-| `std::expected` | `LlmClient::complete` | Failure is a value, not an exception — 429/529 must be retryable |
-| `std::jthread` | Background task output pump | Joins on destruction, carries a stop_token |
-| `std::format` | Prompt assembly, terminal rendering | Replaces a pile of ostringstream |
-
-clangd configuration lives in `.clangd` (without it you get spurious
-`std::expected` errors).
-
-## Testing
+### Build
 
 ```bash
-cmake --build build && ctest --test-dir build --output-on-failure
-./build/test_tool                       # per-case output while developing
+sudo apt install libcurl4-openssl-dev      # needed for real API calls
+cmake -S . -B build -G Ninja
+cmake --build build
 ```
 
-Adding `tests/test_*.cpp` is enough — CMake globs them into individual
-executables and registers each with ctest.
+Tested on Ubuntu 24.04 with g++ 13, CMake 3.28 and Ninja.
 
-Green tests only prove code and tests agree. To check that a test is actually
-watching, break the thing it covers and confirm it turns red:
+### Run
 
 ```bash
-sed -i 's/a->name() == v/a->description() == v/' src/tool.cpp
-cmake --build build --target test_tool && ./build/test_tool   # expect a failure
+export ANTHROPIC_API_KEY=...
+
+./build/mini-agent                                   # interactive
+./build/mini-agent "find where sessions are saved"   # one task, then exit
+./build/mini-agent -c                                # continue the last session
 ```
 
-## Relationship to the Python reference
+| Option | Meaning |
+|---|---|
+| `-C, --dir <path>` | Working directory (default: current directory) |
+| `--model <name>` | Model to use |
+| `--mode <mode>` | `read-only` · `ask` · `auto` · `yolo` |
+| `--no-stream` | Print the answer at the end instead of as it arrives |
+| `-c, --continue` | Resume the most recently used session |
 
-`../mini-swe-agent/reference/` is the same design in Python — 3100 lines, 21
-tests green. Use it to compare *behaviour*, not structure. The C++ version has a
-whole category of problems Python never raises, and `BUILD-GUIDE.md` covers
-those separately.
+Inside interactive mode: `/help` `/tools` `/usage` `/session` `/mode` `/clear` `/exit`.
+
+### Configure (optional)
+
+Everything lives in `.mini-agent/` inside the working directory.
+
+`.mini-agent/config.json`:
+
+```json
+{
+  "model": "claude-opus-5",
+  "permission_mode": "ask",
+  "allow_rules": ["Bash(git status:*)", "Read"],
+  "deny_rules": ["Bash(rm:*)"]
+}
+```
+
+`.mini-agent/mcp.json` — external tool servers (any program that speaks MCP over stdio):
+
+```json
+{ "mcpServers": { "notes": { "command": "python3", "args": ["notes_server.py"] } } }
+```
+
+Its tools show up as `mcp__notes__<tool>`, so a rule like `Mcp__notes__*` covers all of them.
+
+Environment variables override the file: `MINI_AGENT_MODEL`, `MINI_AGENT_MODE`,
+`MINI_AGENT_EFFORT`, `MINI_AGENT_MAX_STEPS`.
+
+### Test
+
+```bash
+ctest --test-dir build --output-on-failure    # all tests
+python3 tools/mutate.py                       # mutation testing (slow)
+cmake --build build --target docs             # check the documentation comments
+
+cmake -S . -B build-tsan -DMINI_AGENT_SANITIZE=thread   # data-race checks
+cmake --build build-tsan && ctest --test-dir build-tsan
+```
+
+## More
+
+[BUILD-GUIDE.md](BUILD-GUIDE.md) walks through the stages ·
+[ARCHITECTURE.md](ARCHITECTURE.md) explains the design ·
+[docs/testing.md](docs/testing.md) explains the testing layers
