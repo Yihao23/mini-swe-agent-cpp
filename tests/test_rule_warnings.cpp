@@ -108,6 +108,10 @@ TEST(the_warning_shows_how_to_write_it) {
     Fixture f;
     f.cfg.allow_rules = {"Bash(git log"};
     const Sandbox sb(f.cfg);
+    // ⚠️ 先确认有这一条再取下标。CHECK 失败会抛异常、中止本用例；而对空 vector
+    //    取 [0] 是未定义行为 —— 变异测试里它让整个测试进程崩溃，同一个二进制里
+    //    其他用例的结果也跟着没了。
+    CHECK(sb.warnings().size() == 1);
     // 光说"写错了"不够，照着改的例子要在同一条消息里。
     CHECK(has(sb.warnings()[0], "Bash(git status:*)"));
 }
