@@ -196,7 +196,19 @@ assertion is written correctly.
 python3 tools/mutate.py            # everything
 python3 tools/mutate.py process    # only mutants whose name or file matches
 python3 tools/mutate.py --check    # verify the anchors still match; no build
+python3 tools/mutate.py --only-tsan   # only the mutants checked under ThreadSanitizer
+python3 tools/mutate.py --no-tsan     # skip them (the TSan build adds a minute or two)
 ```
+
+### Mutants only ThreadSanitizer can see
+
+Remove a lock and a data race usually still produces the right output, so the
+ordinary build stays green. A mutant that declares `tsan=dict(frame="...")` is
+built in `build-tsan/`, runs only its expected case (via `MT_FILTER`), and counts
+as caught only if a TSan report's stack contains that frame — any report at all
+would let an unrelated race vouch for the wrong test. Races are probabilistic, so
+it gets up to three attempts. The unmutated code must produce no reports first,
+and again after restoring.
 
 ### It really does edit your source files
 

@@ -35,7 +35,8 @@ Checked four ways:
 - **Tests** — 22 test programs, all offline (a fake model stands in for the API).
 - **Documented examples** — code examples in the headers are compiled and run as tests.
 - **Mutation testing** — `tools/mutate.py` plants 102 known bugs and checks that
-  the right test catches each one; 5 are recorded as not yet caught, with the reason.
+  the right test catches each one; 3 are recorded as not yet caught, with the reason.
+  Two locks are checked under ThreadSanitizer, the only place their races show.
 - **ThreadSanitizer** — a separate build that checks the concurrent code for data races.
 
 These checks found and fixed real bugs, including sub-agents corrupting each

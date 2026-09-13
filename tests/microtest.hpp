@@ -13,6 +13,11 @@
 //     }
 //     int main() { return mt::run_all(); }
 //
+// 只跑一部分：MT_FILTER=子串 ./build/test_mcp —— 只跑名字里含这个子串的用例。
+// 一个都没匹配上时返回 2 并说明，而不是安安静静地"0/0 通过"：拼错的名字和
+// 全部通过在输出上不能长得一样。tools/mutate.py 的 TSan 模式靠它只跑一个用例。
+//
+#include <cstdlib>
 #include <exception>
 #include <functional>
 #include <iostream>
@@ -42,8 +47,13 @@ struct Failure : std::runtime_error {
 };
 
 inline int run_all() {
+    const char* filter = std::getenv("MT_FILTER");
+    const bool filtering = filter && *filter;
     int failed = 0;
+    std::size_t ran = 0;
     for (const auto& c : registry()) {
+        if (filtering && c.name.find(filter) == std::string::npos) continue;
+        ++ran;
         try {
             c.fn();
             std::cout << "\033[32m✓\033[0m " << c.name << "\n";
@@ -52,8 +62,11 @@ inline int run_all() {
             std::cout << "\033[31m✗\033[0m " << c.name << "\n    " << e.what() << "\n";
         }
     }
-    const auto total = registry().size();
-    std::cout << "\n" << (total - static_cast<std::size_t>(failed)) << "/" << total << " 通过\n";
+    if (filtering && ran == 0) {
+        std::cout << "MT_FILTER=" << filter << " 没有匹配任何用例\n";
+        return 2;
+    }
+    std::cout << "\n" << (ran - static_cast<std::size_t>(failed)) << "/" << ran << " 通过\n";
     return failed == 0 ? 0 : 1;
 }
 

@@ -15,16 +15,37 @@
 
 加一条变异：往 MUTANTS 里加一项，`edits` 里的 old 必须在文件中唯一出现
 （--check 会验证），`expect` 写用例名的子串。
+
+── TSan 模式 ─────────────────────────────────────────────────────────────────
+
+有些 bug 普通构建看不见：去掉一把锁，数据竞争大多数时候碰巧不造成错误输出，
+测试照样全绿。这类变异声明 `tsan=dict(frame="函数名")`，于是：
+
+    * 在 build-tsan/ 里构建（-DMINI_AGENT_SANITIZE=thread，不存在就自动配置）
+    * 通过 setarch -R 启动 —— 新内核上 TSan 不关地址随机化就起不来
+    * 用 MT_FILTER 只跑 expect 里那个用例，TSan 报告写进临时目录
+    * **报告的调用栈里出现 frame** 才算抓到。只看"有报告"不够：一个无关的
+      竞态也会被算成抓到，而该守着这把锁的用例依然是假的
+    * 竞态是概率性的，最多试 attempts 次（默认 3），任意一次报出即算
+
+    python3 tools/mutate.py --only-tsan    # 只跑 TSan 变异
+    python3 tools/mutate.py --no-tsan      # 跳过（TSan 构建要多花一两分钟）
+
+TSan 在这台机器上起不来时，这些变异记为跳过并说明原因，不算失败。
 """
 import argparse
+import os
 import pathlib
+import platform
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 BUILD = ROOT / "build"
+BUILD_TSAN = ROOT / "build-tsan"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 SUBJ_OLD = '\n'.join([
@@ -841,11 +862,10 @@ MUTANTS = [
         edits=[('    std::lock_guard lock(mu_);\n\n    // 三样都要记', "\n    // 三样都要记")],
         binaries=["test_subagent"],
         expect=["task_graph_runs_independent_subagents_at_once_on_one_client"],
-        note="task_graph 的几个子 agent 同时调用同一个 client，剧本、calls_、usage_ 全是共享的",
-        known_gap="只有 ThreadSanitizer 看得见：cmake -B build-tsan -DMINI_AGENT_SANITIZE=thread "
-                  "之后，这条用例会报 FakeLlm::complete 上的数据竞争（实测）。普通构建里两个线程"
-                  "同时 push_back 大多数时候碰巧不丢记录，calls().size() == 26 照样成立。"
-                  "mutate.py 只跑普通构建，所以这里记成已知未覆盖",
+        note="task_graph 的几个子 agent 同时调用同一个 client，剧本、calls_、usage_ 全是共享的。"
+             "普通构建里两个线程同时 push_back 大多数时候碰巧不丢记录，calls().size() == 26 "
+             "照样成立，所以只能在 TSan 下检验",
+        tsan=dict(frame="FakeLlm::complete"),
     ),
     # ── Stage 7：规则匹配 —— 工具名是 glob，记住的批准是字面量 ──────────────
     dict(
@@ -1034,11 +1054,10 @@ MUTANTS = [
         edits=[('        std::lock_guard lock(mu);\n        if (pid < 0) return;     // 压根没起来\n', "        if (pid < 0) return;     // 压根没起来\n")],
         binaries=["test_mcp"],
         expect=["closing_while_another_thread_is_calling_neither_crashes_nor_hangs"],
-        note="正在 read() 的请求线程脚下的 fd 被关掉、再被下一个 open() 复用 —— 读到别的文件",
-        known_gap="只有 ThreadSanitizer 看得见：去掉这把锁后在 build-tsan 里连跑三次，三次都报"
-                  " shutdown() 关写端和关读端时的数据竞争（实测）。普通构建里 fd 被复用需要"
-                  "另一个线程恰好在那一刻 open()，这条用例里没有这样的线程，所以它照样通过。"
-                  "mutate.py 只跑普通构建",
+        note="正在 read() 的请求线程脚下的 fd 被关掉、再被下一个 open() 复用 —— 读到别的文件。"
+             "普通构建里 fd 被复用需要另一个线程恰好在那一刻 open()，这条用例里没有这样的线程，"
+             "所以只能在 TSan 下检验",
+        tsan=dict(frame="McpClient::Impl::shutdown"),
     ),
     # ── Stage 4：计划清单 ───────────────────────────────────────────────────
     dict(
@@ -1146,6 +1165,75 @@ def build():
     return p.returncode == 0, p.stderr
 
 
+def tsan_build_dir_problem():
+    """build-tsan 能不能用。返回 None 表示能用，否则是原因。
+
+    ⚠️ 目录存在但没开 TSan 是最危险的情况：测试在没插桩的二进制上照常跑，
+       TSan 永远不报，每一条变异都会被判成"没抓到" —— 看起来像测试有缺口，
+       其实是工具没在工作。所以不只看目录在不在，要读缓存确认。
+    """
+    cache = BUILD_TSAN / "CMakeCache.txt"
+    if not cache.exists():
+        gen = ["-G", "Ninja"] if shutil.which("ninja") else []
+        p = subprocess.run(["cmake", "-S", str(ROOT), "-B", str(BUILD_TSAN),
+                            "-DMINI_AGENT_SANITIZE=thread"] + gen,
+                           capture_output=True, text=True, timeout=300)
+        if p.returncode != 0:
+            return "配置 build-tsan 失败:\n" + p.stderr[-400:]
+    text = cache.read_text()
+    if not re.search(r"^MINI_AGENT_SANITIZE:STRING=thread$", text, re.M):
+        return ("build-tsan 存在但没开 ThreadSanitizer（缓存里 MINI_AGENT_SANITIZE 不是 thread）。"
+                "\n在它上面跑，TSan 永远不报 —— 删掉它让本工具重新配置，或者自己重新 cmake。")
+    if not shutil.which("setarch"):
+        return "没有 setarch：新内核上 TSan 不关地址随机化就起不来"
+    return None
+
+
+def build_tsan(binaries):
+    """只构建用得到的目标：TSan 构建很慢，全量要一分钟。"""
+    targets = []
+    for b in sorted(set(binaries)):
+        targets += ["--target", b]
+    p = subprocess.run(["cmake", "--build", str(BUILD_TSAN), "-j4"] + targets,
+                       capture_output=True, text=True, timeout=900)
+    return p.returncode == 0, p.stderr + p.stdout[-400:]
+
+
+def tsan_run(binary, case, timeout=300):
+    """在 TSan 下只跑一个用例。
+
+    返回 (失败用例名集合, 状态, 报告文本列表)。
+    状态："ok" / "crash" / "hang" / "nomatch"（MT_FILTER 一个都没匹配上）/
+          "unavailable"（TSan 自己起不来）。
+    """
+    exe = BUILD_TSAN / binary
+    with tempfile.TemporaryDirectory(prefix="mutate-tsan-") as d:
+        env = dict(os.environ)
+        env["TSAN_OPTIONS"] = f"log_path={d}/report second_deadlock_stack=1"
+        env["MT_FILTER"] = case
+        cmd = ["setarch", platform.machine(), "-R", str(exe)]
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
+        except subprocess.TimeoutExpired:
+            return set(), "hang", []
+        reports = [f.read_text(errors="replace") for f in sorted(pathlib.Path(d).iterdir())]
+    out = ANSI.sub("", p.stdout)
+    if "FATAL: ThreadSanitizer" in p.stderr or any("FATAL: ThreadSanitizer" in r for r in reports):
+        return set(), "unavailable", reports
+    if p.returncode == 2 and "没有匹配任何用例" in out:
+        return set(), "nomatch", reports
+    red = {m.group(1) for m in re.finditer(r"^✗ (\S+)", out, re.M)}
+    # TSan 发现竞态时退出码是 66，那不是崩溃
+    crashed = p.returncode < 0 or (p.returncode >= 128)
+    return red, ("crash" if crashed and not red else "ok"), reports
+
+
+def tsan_targets(picked):
+    """[(binary, 用例名子串)]：每条 TSan 变异要在哪个二进制里跑哪个用例。"""
+    return sorted({(b, e) for m in picked if m.get("tsan")
+                   for b in m["binaries"] for e in m["expect"]})
+
+
 def dirty_sources():
     """哪些会被变异的文件当前有未提交改动。
 
@@ -1182,8 +1270,47 @@ def apply(m):
     path.write_text(text)
 
 
+def run_one_tsan(m):
+    """TSan 变异：只在 build-tsan 里跑 expect 的那个用例，看报告里有没有 frame。"""
+    frame = m["tsan"]["frame"]
+    attempts = m["tsan"].get("attempts", 3)
+    path = ROOT / m["file"]
+    backup = path.read_text()
+    try:
+        apply(m)
+        ok, err = build_tsan(m["binaries"])
+        if not ok:
+            return False, "变异后 TSan 构建不过:\n" + err[-500:]
+        other = []
+        for attempt in range(1, attempts + 1):
+            for b in m["binaries"]:
+                for case in m["expect"]:
+                    red, status, reports = tsan_run(b, case)
+                    if status == "nomatch":
+                        return False, f"MT_FILTER={case!r} 在 {b} 里没匹配到任何用例 —— expect 写错了"
+                    if status == "hang":
+                        return True, f"⚠ 抓到了，但表现是**卡死**（{b}），不是一份竞态报告"
+                    if status == "crash":
+                        return True, f"⚠ 抓到了，但表现是**崩溃**（{b}），不是一份竞态报告"
+                    hits = [r for r in reports if frame in r]
+                    if hits or any(case in name for name in red):
+                        how = (f"{len(hits)} 份竞态报告的调用栈里有 {frame}"
+                               if hits else "用例直接变红")
+                        tries = f"，第 {attempt} 次" if attempt > 1 else ""
+                        return True, f"TSan 抓到（{how}{tries}）: {case}"
+                    other += reports
+        extra = (f"；另有 {len(other)} 份报告，但调用栈里都没有 {frame}" if other else "")
+        return False, (f"TSan 试了 {attempts} 次，没有一份报告的调用栈里出现 {frame}{extra}。"
+                       "\n    竞态是概率性的：先确认用例真的让两个线程在时间上交错"
+                       "（每个线程调很多次，而不是一次）")
+    finally:
+        path.write_text(backup)
+
+
 def run_one(m):
     """返回 (ok, 说明)。"""
+    if m.get("tsan"):
+        return run_one_tsan(m)
     path = ROOT / m["file"]
     backup = path.read_text()
     try:
@@ -1230,7 +1357,12 @@ def main():
     ap.add_argument("--check", action="store_true", help="只校验锚点，不编译")
     ap.add_argument("--dirty-ok", action="store_true",
                     help="源码有未提交改动时也跑（还原失败就救不回来了）")
+    ap.add_argument("--no-tsan", action="store_true", help="跳过要在 ThreadSanitizer 下检验的变异")
+    ap.add_argument("--only-tsan", action="store_true", help="只跑要在 ThreadSanitizer 下检验的变异")
     args = ap.parse_args()
+    if args.no_tsan and args.only_tsan:
+        print("--no-tsan 和 --only-tsan 不能同时用")
+        return 2
 
     if not shutil.which("cmake") or not BUILD.exists():
         print(f"需要一个已配置好的构建目录: {BUILD}")
@@ -1262,33 +1394,68 @@ def main():
                 or any(args.filter in b for b in m["binaries"]))
 
     picked = [m for m in MUTANTS if matches(m)]
+    if args.only_tsan:
+        picked = [m for m in picked if m.get("tsan")]
+    skipped_tsan = []
+    if args.no_tsan:
+        skipped_tsan = [m for m in picked if m.get("tsan")]
+        picked = [m for m in picked if not m.get("tsan")]
     if not picked:
         print(f"没有匹配 {args.filter!r} 的变异。可用的过滤词：")
         print("  文件: " + ", ".join(sorted({m["file"] for m in MUTANTS})))
         print("  测试: " + ", ".join(sorted({b for m in MUTANTS for b in m["binaries"]})))
         return 1
-    print(f"选中 {len(picked)}/{len(MUTANTS)} 条变异")
+    print(f"选中 {len(picked)}/{len(MUTANTS)} 条变异"
+          + (f"（--no-tsan 跳过了 {len(skipped_tsan)} 条 TSan 变异）" if skipped_tsan else ""))
 
-    print("先确认基线是绿的 ...", end=" ", flush=True)
-    ok, err = build()
-    if not ok:
-        print("编译不过\n" + err[-500:])
-        return 1
-    bins = sorted({b for m in picked for b in m["binaries"]})
-    baseline = {b: failures(b) for b in bins}
-    if any(status != "ok" or red for red, status in baseline.values()):
-        print("失败 —— 未变异的代码就有红的用例（或崩溃/卡死），先修那个")
-        for b, (red, status) in baseline.items():
-            if red or status != "ok":
-                print(f"  {b}: {status} {', '.join(sorted(red))}")
-        return 1
-    print("绿")
+    normal = [m for m in picked if not m.get("tsan")]
+    bins = sorted({b for m in normal for b in m["binaries"]})
+    if normal:
+        print("先确认基线是绿的 ...", end=" ", flush=True)
+        ok, err = build()
+        if not ok:
+            print("编译不过\n" + err[-500:])
+            return 1
+        baseline = {b: failures(b) for b in bins}
+        if any(status != "ok" or red for red, status in baseline.values()):
+            print("失败 —— 未变异的代码就有红的用例（或崩溃/卡死），先修那个")
+            for b, (red, status) in baseline.items():
+                if red or status != "ok":
+                    print(f"  {b}: {status} {', '.join(sorted(red))}")
+            return 1
+        print("绿")
+
+    # TSan 基线：未变异的代码在这些用例上必须一份报告都没有。否则变异后的
+    # "有报告"说明不了任何事 —— 那份报告本来就在。
+    tsan_pairs = tsan_targets(picked)
+    tsan_unavailable = None
+    if tsan_pairs:
+        print("确认 TSan 基线干净 ...", end=" ", flush=True)
+        tsan_unavailable = tsan_build_dir_problem()
+        if not tsan_unavailable:
+            ok, err = build_tsan([b for b, _ in tsan_pairs])
+            if not ok:
+                tsan_unavailable = "TSan 构建不过:\n" + err[-400:]
+        if not tsan_unavailable:
+            for b, case in tsan_pairs:
+                red, status, reports = tsan_run(b, case)
+                if status == "unavailable":
+                    tsan_unavailable = "ThreadSanitizer 在这台机器上起不来"
+                    break
+                if status != "ok" or red or reports:
+                    print(f"失败 —— 未变异的代码在 TSan 下就不干净：{b} / {case}：{status}，"
+                          f"{len(reports)} 份报告，红: {', '.join(sorted(red)) or '无'}")
+                    return 1
+        print(f"跳过 —— {tsan_unavailable}" if tsan_unavailable else "干净")
 
     passed, gaps, failed = 0, 0, 0
     for i, m in enumerate(picked, 1):
         print(f"\n[{i}/{len(picked)}] {m['name']}")
         print(f"        {m['note']}")
-        good, msg = run_one(m)
+        if m.get("tsan") and tsan_unavailable:
+            good, msg = None, "跳过（TSan 不可用）"
+        else:
+            good, msg = run_one(m)
         mark = {True: "✓", False: "✗", None: "○"}[good]
         if good is None:
             gaps += 1
@@ -1302,13 +1469,29 @@ def main():
           + (f"，{gaps} 条已知未覆盖" if gaps else "")
           + (f"，{failed} 条**该抓没抓到**" if failed else ""))
 
-    print("\n还原后重新确认基线 ...", end=" ", flush=True)
-    ok, _ = build()
-    after = {b: failures(b) for b in bins} if ok else None
-    if not ok or any(status != "ok" or red for red, status in (after or {}).values()):
-        print("失败 —— 还原没干净，或者某次变异污染了环境")
-        return 1
-    print("绿")
+    if normal:
+        print("\n还原后重新确认基线 ...", end=" ", flush=True)
+        ok, _ = build()
+        after = {b: failures(b) for b in bins} if ok else None
+        if not ok or any(status != "ok" or red for red, status in (after or {}).values()):
+            print("失败 —— 还原没干净，或者某次变异污染了环境")
+            return 1
+        print("绿")
+    if tsan_pairs and not tsan_unavailable:
+        # ⚠️ 这一步也把 build-tsan 里被变异过的目标重新编回来。不做的话，
+        #    有人接着 ctest --test-dir build-tsan，跑的是变异版本的二进制。
+        print("还原后重新确认 TSan 基线 ...", end=" ", flush=True)
+        ok, _ = build_tsan([b for b, _ in tsan_pairs])
+        dirty = [] if ok else ["TSan 构建不过"]
+        if ok:
+            for b, case in tsan_pairs:
+                red, status, reports = tsan_run(b, case)
+                if status != "ok" or red or reports:
+                    dirty.append(f"{b} / {case}")
+        if dirty:
+            print("失败 —— " + "；".join(dirty))
+            return 1
+        print("干净")
     return 0 if failed == 0 else 1
 
 

@@ -180,7 +180,17 @@ CHECK(!sb.resolve_path("/work-other/x.py").second.allowed());
 python3 tools/mutate.py            # 全部
 python3 tools/mutate.py process    # 只跑 process 相关的
 python3 tools/mutate.py --check    # 只校验变异点还对得上代码，不编译
+python3 tools/mutate.py --only-tsan   # 只跑要在 ThreadSanitizer 下检验的变异
+python3 tools/mutate.py --no-tsan     # 跳过它们（TSan 构建要多花一两分钟）
 ```
+
+### 只有 ThreadSanitizer 看得见的变异
+
+去掉一把锁，数据竞争大多数时候照样输出正确结果，普通构建一直是绿的。声明了
+`tsan=dict(frame="...")` 的变异会在 `build-tsan/` 里构建，通过 `MT_FILTER` 只跑
+期望的那个用例，**TSan 报告的调用栈里出现那个 frame** 才算抓到 —— 只看"有报告"
+的话，一个无关的竞态也能替错误的用例作证。竞态是概率性的，所以最多试三次。
+变异之前，未变异的代码必须一份报告都没有；还原之后再确认一遍。
 
 ### 它真的会改你的源文件
 
